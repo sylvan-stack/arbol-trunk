@@ -1,0 +1,10 @@
+{
+  "name": "@sylvan-stack/arbol-trunk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Arbol Trunk: a component of Arbol 2.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sylvan-stack/arbol-trunk.git"
+  }
+}

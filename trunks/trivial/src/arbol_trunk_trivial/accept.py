@@ -81,10 +81,8 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
     """Steps 3 to 5 of RCT-2's acceptance: the folder with a record without `acceptedAt`, the transaction, then
     `acceptedAt`. `started` is the start of the Trunk (time.monotonic()); a refusal leaves no folder behind."""
     handed = prepared.handed
-    if handed.replaces is not None:
+    if handed.replaces is not None or handed.message is None:  # a message without --replaces: handed() saw to it
         raise invalid("Sending a message again is not built yet.")
-    if handed.message is None:
-        raise invalid("No message was handed.")
     exchange = handed.exchange or str(uuid.uuid4())
     chat = handed.chat or str(uuid.uuid4())
     record: dict[str, Any] = {"rootContract": prepared.root.root_contract, "root": prepared.root.identifier,

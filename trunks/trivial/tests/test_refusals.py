@@ -56,10 +56,10 @@ class Start(unittest.TestCase):
     def root_json(self, value: Any) -> None:
         (self.root / "root.json").write_text(value if isinstance(value, str) else json.dumps(value))
 
-    def start(self, *args: str, request: dict[str, Any] | None = None, root: str = "rct",
+    def start(self, *args: str, request: dict[str, Any] | None = None, root: str = "rct", command: str = "run",
               started: float | None = None) -> tuple[int, list[str]]:
-        """`--root <root> run [--request <file>] <args>` from the command line to its end; its exit status and the
-        lines it wrote on standard output."""
+        """`--root <root> <command> [--request <file>] <args>` from the command line to its end; its exit status and
+        the lines it wrote on standard output."""
         lines: list[str] = []
         request_args: tuple[str, ...] = ()
         if request is not None:
@@ -72,7 +72,7 @@ class Start(unittest.TestCase):
 
         with mock.patch.dict("os.environ", {"STANDIN_LOG": str(self.home), "ARBOL_TEST_TIME_SCALE": "10"}):
             status = asyncio.run(start(
-                ["--root", root, "run", *request_args, *args], home=self.home,
+                ["--root", root, command, *request_args, *args], home=self.home,
                 started=time.monotonic() if started is None else started, connector=connector,
                 security=str(self.security), started_in=str(self.work), output=Output(lines.append),
                 search_path=f"{self.bin}:/usr/bin:/bin"))
@@ -84,11 +84,11 @@ class Start(unittest.TestCase):
                               "tool_calls": db.tool_calls, "runs": db.runs, "saves": db.saves})
 
     def refused(self, code: str, *args: str, request: dict[str, Any] | None = None, root: str = "rct",
-                started: float | None = None) -> str:
+                command: str = "run", started: float | None = None) -> str:
         """Judges a refusal: one line `{"error":{"code","message"}}` with `code`, the exit status 1, no folder, no
         row, and no Driver started. Gives its message."""
         before = self.tables()
-        status, lines = self.start(*args, request=request, root=root, started=started)
+        status, lines = self.start(*args, request=request, root=root, command=command, started=started)
         self.assertEqual(len(lines), 1, lines)
         answer = json.loads(lines[0])
         self.assertEqual(list(answer), ["error"], answer)
@@ -114,6 +114,60 @@ class WholeStart(Start):
 
     def test_an_unknown_option_is_refused_with_invalid_input(self) -> None:
         self.refused("invalid_input", *ROUTE, "--bogus", "hi")
+
+
+class InvalidInput(Start):
+    """Refused from the options and the request file alone, before the Root, the settings or the Keychain is read."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.root_json("{")  # a start that read the Root would be refused with unknown_root instead
+
+    def test_the_command_line(self) -> None:
+        for args, command in (((*ROUTE, "--bogus", "hi"), "run"), ((*ROUTE, "-v", "4", "hi"), "run"),
+                              ((*ROUTE, "hi"), "list"), ((), ""), ((*ROUTE, "--root", "rct", "hi"), "run"),
+                              ((*ROUTE, "--model", "opus", "hi"), "run"), ((*ROUTE, "one", "two"), "run"),
+                              ((*ROUTE, "--cwd"), "run")):
+            with self.subTest(args=args, command=command):
+                self.refused("invalid_input", *args, command=command)
+        self.assertFalse((self.home / "security.args").exists(), "the Keychain was read")
+
+    def test_a_root_identifier_that_is_not_one_lower_case_word_of_letters_and_digits(self) -> None:
+        for root in ("../rct", "Rct", "r-c-t", "rct/", ""):
+            with self.subTest(root=root):
+                self.refused("invalid_input", *ROUTE, "hi", root=root)
+
+    def test_no_message(self) -> None:
+        self.assertEqual(self.refused("invalid_input", *ROUTE), "No message was handed.")
+        self.refused("invalid_input", *ROUTE, request={"message": None})
+        self.assertFalse((self.home / "security.args").exists(), "the Keychain was read")
+
+    def test_an_identifier_that_is_not_a_uuid(self) -> None:
+        for args in (("--exchange", "not-a-uuid"), ("--chat", "C3D4E5F6-0718-4293-A4B5-C6D7E8F90A1B"),
+                     ("--replaces", "7f3a2c1e")):
+            with self.subTest(args=args):
+                self.refused("invalid_input", *ROUTE, *args, "hi")
+        self.refused("invalid_input", *ROUTE, request={"message": "hi", "exchange": 7})
+
+    def test_a_working_folder_that_is_not_absolute_or_does_not_exist(self) -> None:
+        for folder in ("work", "./work", str(self.home / "missing"), str(self.home / "start.json")):
+            with self.subTest(folder=folder):
+                (self.home / "start.json").write_text("{}")
+                self.refused("invalid_input", *ROUTE, "--cwd", folder, "hi")
+                self.refused("invalid_input", *ROUTE, request={"message": "hi", "workingFolder": folder})
+
+    def test_replaces_together_with_a_message(self) -> None:
+        exchange = "2d4f6a8c-1b3e-4c5d-8e7f-9a0b1c2d3e4f"
+        self.assertIn("--replaces takes no message", self.refused("invalid_input", *ROUTE, "--replaces", exchange,
+                                                                  "hi"))
+        self.refused("invalid_input", *ROUTE, request={"replaces": exchange, "message": "hi"})
+
+    def test_a_request_file_that_cannot_be_read_or_holds_no_object(self) -> None:
+        self.refused("invalid_input", *ROUTE, "--request", str(self.home / "none.json"), "hi")
+        for body in ("[1]", "{", '{"route": "claude", "message": "hi"}', '{"message": 4}'):
+            with self.subTest(body=body):
+                (self.home / "start.json").write_text(body)
+                self.refused("invalid_input", "--request", str(self.home / "start.json"))
 
 
 if __name__ == "__main__":

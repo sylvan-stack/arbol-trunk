@@ -140,11 +140,16 @@ def handed(command: Command, started_in: str | None = None) -> Handed:
     message = command.message if command.message is not None else request.get("message")
     if message is not None and not isinstance(message, str):
         raise invalid("message is a string.")
+    replaces = identifier("replaces", "--replaces")
+    if replaces is not None and message is not None:
+        raise invalid("A message sent again is the message of the Exchange it replaces: --replaces takes no message.")
+    if replaces is None and message is None:
+        raise invalid("No message was handed.")
     folder = text("workingFolder", "--cwd")
     if folder is None:
         folder = started_in if started_in is not None else os.getcwd()
     if not os.path.isabs(folder) or not os.path.isdir(folder):
         raise invalid(f"The working folder is an absolute path to a folder that exists, not {folder!r}.")
     return Handed(root=command.root, exchange=identifier("exchange", "--exchange"), chat=identifier("chat", "--chat"),
-                  replaces=identifier("replaces", "--replaces"), message=message, route=route,
-                  small_call_route=small_call_route, working_folder=folder, detach=command.detach)
+                  replaces=replaces, message=message, route=route, small_call_route=small_call_route,
+                  working_folder=folder, detach=command.detach)

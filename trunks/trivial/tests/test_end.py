@@ -1,12 +1,21 @@
+import asyncio
 import json
 import os
 import tempfile
+import time
 import unittest
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
-from arbol_trunk_trivial.end import End, end_of_run, write_end
+from fakes import Exchange, FakeDatabase
+
+from arbol_trunk_trivial.end import End, end_of_run, finish, write_end
 from arbol_trunk_trivial.events import EventsFile
 from arbol_trunk_trivial.folder import ExchangeFolder
+from arbol_trunk_trivial.rows import MessageRow, Row, RunRow
+from arbol_trunk_trivial.saver import Saver
 
 X = "7f3a2c1e-4b5d-4e6f-8a9b-0c1d2e3f4a5b"
 RATE = {"code": "rate_limited", "message": "…", "retryable": True, "retryAfterSeconds": 1800}
@@ -39,6 +48,56 @@ class Ends(unittest.TestCase):
             self.assertEqual(set(end.value()), {"state", "at", "error"})
             self.assertNotIn("error", End("completed", end.at).value())
             self.assertEqual(sorted(os.listdir(folder.path)), ["control", "events.jsonl", "record.json"])
+
+
+class SavingTheEnd(unittest.TestCase):
+    def setUp(self) -> None:
+        name = tempfile.TemporaryDirectory()
+        self.addCleanup(name.cleanup)
+        self.exchanges = Path(name.name)
+        self.folder = ExchangeFolder.make(self.exchanges, X, {"exchange": X, "signsOfLife": {}})
+        self.database = FakeDatabase()
+        self.database.exchanges[X] = Exchange(X, "c", 1, "open", "trivial", "0", {}, None, "/w", datetime.now(UTC))
+
+    def finish(self, unsaved: Sequence[Row], at_end: Sequence[Row], end: End) -> bool:
+        async def go() -> bool:
+            keeper = Saver(self.database.connect())
+            keeper.add(unsaved)
+            return await finish(keeper, self.folder, at_end, end)
+
+        return asyncio.run(go())
+
+    def test_the_rows_not_yet_saved_and_the_final_state_in_one_transaction_then_the_folder_goes(self) -> None:
+        run = RunRow(X, f"{X}.1", "agent", "completed", {}, None, None, datetime.now(UTC))
+        end = End("completed", datetime.now(UTC))
+        self.assertTrue(self.finish([MessageRow(X, 3, "a")], [run], end))
+        self.assertEqual(self.database.ends, 1)
+        self.assertEqual(self.database.messages[(X, 3)], ("assistant", "a"))
+        self.assertIn((X, f"{X}.1"), self.database.runs)
+        self.assertEqual((self.database.exchanges[X].state, self.database.exchanges[X].ended_at), ("completed", end.at))
+        self.assertEqual(os.listdir(self.exchanges), [])
+
+    def test_an_exchange_that_has_ended_is_not_changed(self) -> None:
+        self.database.exchanges[X].state = "interrupted"
+        self.assertTrue(self.finish([], [], End("failed", datetime.now(UTC), RATE)))
+        self.assertEqual((self.database.exchanges[X].state, self.database.exchanges[X].error), ("interrupted", None))
+
+    def test_a_database_that_is_away_is_tried_for_60_seconds_and_then_the_folder_stays(self) -> None:
+        self.database.fail_end = 1000
+        began = time.monotonic()
+        with mock.patch.dict("os.environ", {"ARBOL_TEST_TIME_SCALE": "100"}):
+            self.assertFalse(self.finish([], [], End("completed", datetime.now(UTC))))
+        self.assertGreater(time.monotonic() - began, 0.5)
+        self.assertLess(time.monotonic() - began, 3)
+        self.assertGreaterEqual(self.database.connections, 10)
+        self.assertEqual(os.listdir(self.exchanges), [X])
+        self.assertEqual(self.database.exchanges[X].state, "open")
+
+    def test_a_database_back_within_the_60_seconds_takes_the_end(self) -> None:
+        self.database.fail_end = 2
+        with mock.patch.dict("os.environ", {"ARBOL_TEST_TIME_SCALE": "100"}):
+            self.assertTrue(self.finish([], [], End("completed", datetime.now(UTC))))
+        self.assertEqual(self.database.exchanges[X].state, "completed")
 
 
 if __name__ == "__main__":

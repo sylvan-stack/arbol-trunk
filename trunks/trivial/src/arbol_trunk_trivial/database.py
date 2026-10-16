@@ -8,7 +8,7 @@ database the address names. The limit of a call is not divided by ARBOL_TEST_TIM
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -20,7 +20,7 @@ from psycopg.types.json import Jsonb
 
 from . import NAME
 from .history import HistoryRow
-from .rows import Row
+from .rows import Row, jsonb
 
 CALL_SECONDS = 5.0
 
@@ -64,6 +64,9 @@ class Connection(Protocol):
     async def accept(self, acceptance: Acceptance) -> Accepted: ...
 
     async def save(self, row: Row) -> None: ...
+
+    async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
+                  error: dict[str, Any] | None) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -142,6 +145,18 @@ class PostgresConnection:
         """One row, with an insert that does nothing when it is there, in a transaction of its own."""
         sql, params = row.statement()
         await within_limit(self.connection.execute(sql, params))
+
+    async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
+                  error: dict[str, Any] | None) -> None:
+        """One transaction: the rows not yet saved, and the final state, changing the Exchange only while it is open
+        (RCT-2.20)."""
+        async with self.connection.transaction(), self.connection.cursor() as cursor:
+            for row in rows:
+                sql, params = row.statement()
+                await within_limit(cursor.execute(sql, params))
+            await within_limit(cursor.execute(
+                "UPDATE exchanges SET state = %s, ended_at = %s, error = %s WHERE id = %s AND state = 'open'",
+                (state, ended_at, jsonb(error), exchange)))
 
     async def open_exchange(self, chat: str) -> str | None:
         try:

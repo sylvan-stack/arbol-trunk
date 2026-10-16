@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from arbol_trunk_trivial.database import Acceptance, Accepted, ChatBusy, Connect, Connection, DatabaseUnavailable
@@ -41,6 +43,8 @@ class FakeDatabase:
     closed: int = 0
     fail_connect: int = 0  # the next n connects fail
     fail_save: int = 0  # the next n saves fail
+    fail_end: int = 0  # the next n end transactions fail
+    ends: int = 0
     delay: float = 0.0  # each call waits this long first
     saves: list[Row] = field(default_factory=list)  # every row saved, in order, a row saved twice twice
 
@@ -110,3 +114,20 @@ class FakeConnection:
             db.runs.setdefault((row.exchange, row.run_id), {
                 "kind": row.kind, "outcome": row.outcome, "usage": row.usage, "error": row.error,
                 "started": row.started, "ended_at": row.ended_at})
+
+    async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
+                  error: dict[str, Any] | None) -> None:
+        await self._call()
+        db = self.database
+        if db.fail_end:
+            db.fail_end -= 1
+            raise DatabaseUnavailable("The fake database refused the end.")
+        db.ends += 1
+        saves, failing = db.saves, db.fail_save
+        db.fail_save = 0
+        for row in rows:
+            await self.save(row)
+        db.fail_save, db.saves = failing, saves
+        found = db.exchanges.get(exchange)
+        if found is not None and found.state == "open":
+            found.state, found.ended_at, found.error = state, ended_at, error

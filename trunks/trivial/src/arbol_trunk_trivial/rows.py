@@ -110,10 +110,13 @@ class RowMaker:
         self.usage: dict[str, dict[str, Any]] = {}
         self.last_at: dict[str, Any] = {}
         self.finished: set[str] = set()
+        self.seen: list[str] = []  # the runs that gave an event, in order
 
     def take(self, n: int, event: dict[str, Any]) -> list[Row]:
         run_id = text(event.get("runId")) or ""
         kind = event.get("type")
+        if run_id not in self.seen:
+            self.seen.append(run_id)
         if "at" in event:
             self.last_at[run_id] = event["at"]
         if kind == "started":
@@ -144,16 +147,17 @@ class RowMaker:
                            moment(event.get("at")))]
         return []
 
-    def at_end(self, run_ids: list[str]) -> list[Row]:
-        """The rows the end makes due: a call without its `tool_finished` as interrupted, and each of `run_ids`
-        without its `finished` as interrupted, with its last usage and the time of its last line."""
+    def at_end(self, run_ids: list[str] | None = None) -> list[Row]:
+        """The rows the end makes due: a call without its `tool_finished` as interrupted, and each run that gave an
+        event (or each of `run_ids`) without its `finished` as interrupted, with its last usage and the time of its
+        last line."""
         rows: list[Row] = []
         for (run_id, call_id), (position, started) in sorted(self.calls.items(), key=lambda item: item[1][0]):
             rows.append(ToolCallRow(self.exchange, position, run_id, call_id, text(started.get("parentCallId")),
                                     str(started.get("name", "")), started.get("input"), False,
                                     error=INTERRUPTED_CALL, interrupted=True))
         self.calls.clear()
-        for run_id in run_ids:
+        for run_id in self.seen if run_ids is None else run_ids:
             if run_id not in self.finished:
                 self.finished.add(run_id)
                 rows.append(RunRow(self.exchange, run_id, "agent", "interrupted", self.usage.get(run_id, {}), None,

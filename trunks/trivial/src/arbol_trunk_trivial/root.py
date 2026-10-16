@@ -21,7 +21,7 @@ from psycopg.conninfo import conninfo_to_dict
 
 from .errors import Refusal
 
-ROOT_CONTRACTS = (1,)  # the versions of the Root Contract this Trunk implements, as arbol-build.json lists them
+ROOT_CONTRACTS = (1,)  # the versions of the Root Contract this Trunk implements, as arbol-build.json lists them (TRV-D14)
 KEYCHAIN_SERVICE = "com.sylvan-stack.arbol.database"
 KEYCHAIN_SECONDS = 2.0  # not divided by ARBOL_TEST_TIME_SCALE (RCT-4)
 NO_SUCH_ITEM = 44

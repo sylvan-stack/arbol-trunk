@@ -13,33 +13,51 @@ import asyncio
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .build import BuildRecordError, build_number
 from .command import handed, parse
-from .database import conninfo, postgres
+from .database import Connect, conninfo, postgres
 from .detach import lead_process_group
 from .errors import Refusal
 from .process import started_at
-from .run import run_exchange
-from .start import prepare
+from .root import SECURITY
+from .run import Output, run_exchange
+from .start import Prepared, prepare
+
+Connector = Callable[[Prepared], Connect]
+
+
+def postgres_for(prepared: Prepared) -> Connect:
+    """The Root's own database, at the address of `~/.arbol/database.json` with the password of the Keychain."""
+    return postgres(conninfo(prepared.address, prepared.root.database, prepared.password))
+
+
+async def start(args: list[str], *, home: Path, started: float, connector: Connector = postgres_for,
+                security: str = SECURITY, started_in: str | None = None, output: Output | None = None,
+                search_path: str | None = None) -> int:
+    """`run` from its command line to its end: one answer on standard output, the acceptance line or a refusal, then
+    the Exchange. `started` is the start of the Trunk (time.monotonic()); a refusal is the exit status 1 (RCT-2)."""
+    output = output or Output()
+    try:
+        build = build_number()
+        prepared = prepare(handed(parse(args), started_in), home, security)
+    except BuildRecordError as error:
+        output.line(Refusal("trunk_failed", str(error)).line())
+        return 1
+    except Refusal as refusal:
+        output.line(refusal.line())
+        return 1
+    process = {"pid": os.getpid(), "startedAt": started_at()}
+    return await run_exchange(prepared, connector(prepared), build=build, process=process, started=started,
+                              output=output, search_path=search_path)
 
 
 def main(args: list[str]) -> int:
     started = time.monotonic()
     lead_process_group()
-    try:
-        build = build_number()
-        prepared = prepare(handed(parse(args)), Path.home())
-    except BuildRecordError as error:
-        print(Refusal("trunk_failed", str(error)).line(), flush=True)
-        return 1
-    except Refusal as refusal:
-        print(refusal.line(), flush=True)
-        return 1
-    connect = postgres(conninfo(prepared.address, prepared.root.database, prepared.password))
-    process = {"pid": os.getpid(), "startedAt": started_at()}
-    return asyncio.run(run_exchange(prepared, connect, build=build, process=process, started=started))
+    return asyncio.run(start(args, home=Path.home(), started=started))
 
 
 def entry() -> None:

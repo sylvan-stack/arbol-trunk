@@ -40,7 +40,7 @@ class Saving(unittest.TestCase):
             await keeper.stop()
 
         asyncio.run(go())
-        self.assertEqual([row.position for row in database.saves], [3, 4, 6])  # type: ignore[union-attr]
+        self.assertEqual(positions(database.saves), [3, 4, 6])
         self.assertEqual(database.connections, 1)
 
     def test_the_loop_never_waits_for_a_slow_database(self) -> None:
@@ -74,7 +74,7 @@ class Saving(unittest.TestCase):
         with mock.patch.object(saver, "RETRY_SECONDS", 0.05):
             keeper = asyncio.run(go())
         self.assertEqual((keeper.saved, keeper.failures), (2, 2))
-        self.assertEqual([row.position for row in database.saves], [3, 4])  # type: ignore[union-attr]
+        self.assertEqual(positions(database.saves), [3, 4])
         self.assertEqual(database.connections, 3)
         self.assertEqual(database.closed, 2)
 
@@ -107,7 +107,7 @@ class Saving(unittest.TestCase):
             return keeper
 
         keeper = asyncio.run(go())
-        self.assertEqual([row.position for row in keeper.unsaved], [3, 4])  # type: ignore[union-attr]
+        self.assertEqual(positions(keeper.unsaved), [3, 4])
 
 
 if __name__ == "__main__":

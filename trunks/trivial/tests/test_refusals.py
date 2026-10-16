@@ -13,16 +13,19 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import fakes
 from fakes import FakeDatabase
 from stand_ins import security_stand_in
 
 from arbol_trunk_trivial.cli import start
-from arbol_trunk_trivial.database import Connect
+from arbol_trunk_trivial.database import Acceptance, Accepted, Connect, Connection
 from arbol_trunk_trivial.root import ROOT_CONTRACTS, roots_folder
 from arbol_trunk_trivial.run import Output
 from arbol_trunk_trivial.settings import settings_file
 from arbol_trunk_trivial.start import Prepared
 
+CHAT = "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"
+OPEN = "6e2f4a8c-1b3e-4c5d-8e7f-9a0b1c2d3e4f"
 ROUTE = ("--driver", "claude", "--subscription", "anthropic", "--model", "sonnet")
 
 # A launcher that only notes that it was started, and ends at once without an event.
@@ -233,6 +236,52 @@ class TheRootTheKeychainAndTheFolder(Start):
         self.assertEqual(self.database.connections, 0)
         os.rmdir(self.exchanges)
         self.refused("trunk_failed", *ROUTE, "hi")
+
+
+class TheDatabase(Start):
+    def test_a_server_that_cannot_be_reached_is_refused_as_unavailable(self) -> None:
+        self.database.fail_connect = 1
+        self.assertIn("cannot be reached", self.refused("database_unavailable", *ROUTE, "hi"))
+
+    def test_work_with_the_database_not_done_within_10_seconds_of_the_start_is_refused_as_unavailable(self) -> None:
+        for delay_connect in (True, False):
+            with self.subTest(delay_connect=delay_connect):
+                self.database = FakeDatabase(delay=60) if delay_connect else SlowAcceptance()
+                began = time.monotonic()
+                message = self.refused("database_unavailable", *ROUTE, "hi", started=began - 9.5)
+                self.assertLess(time.monotonic() - began, 1.5)
+                self.assertIn("within 10 seconds of the start", message)
+                self.assertEqual(self.database.closed, 0 if delay_connect else 1)
+
+    def test_a_chat_with_an_open_exchange_is_busy_and_the_refusal_names_it(self) -> None:
+        self.database.chats[CHAT] = "2026-10-15T09:30:00Z"
+        self.database.exchanges[OPEN] = fakes.Exchange(OPEN, CHAT, 1, "open", "trivial", "0", {}, None, "/", None)
+        message = self.refused("chat_busy", *ROUTE, "--chat", CHAT, "hi")
+        self.assertEqual(message, f"The chat has an Exchange in progress: {OPEN}.")
+        self.assertEqual(self.database.closed, 1)
+
+    def test_a_chat_whose_exchanges_have_ended_takes_the_next_message(self) -> None:
+        self.database.chats[CHAT] = "2026-10-15T09:30:00Z"
+        self.database.exchanges[OPEN] = fakes.Exchange(OPEN, CHAT, 1, "failed", "trivial", "0", {}, None, "/", None)
+        status, lines = self.start(*ROUTE, "--chat", CHAT, "hi")
+        self.assertEqual(json.loads(lines[0])["number"], 2)
+
+
+class SlowAcceptance(FakeDatabase):
+    """Connects at once; its acceptance never answers."""
+
+    def connect(self) -> Connect:
+        async def connect() -> Connection:
+            self.connections += 1
+            return SlowConnection(self)
+
+        return connect
+
+
+class SlowConnection(fakes.FakeConnection):
+    async def accept(self, acceptance: Acceptance) -> Accepted:
+        await asyncio.sleep(60)
+        raise AssertionError("unreachable")
 
 
 if __name__ == "__main__":

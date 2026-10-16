@@ -18,7 +18,7 @@ from stand_ins import security_stand_in
 
 from arbol_trunk_trivial.cli import start
 from arbol_trunk_trivial.database import Connect
-from arbol_trunk_trivial.root import roots_folder
+from arbol_trunk_trivial.root import ROOT_CONTRACTS, roots_folder
 from arbol_trunk_trivial.run import Output
 from arbol_trunk_trivial.settings import settings_file
 from arbol_trunk_trivial.start import Prepared
@@ -189,6 +189,50 @@ class NoDriver(Start):
         status, lines = self.start("hi")
         self.assertEqual(json.loads(lines[0])["accepted"], True)
         self.assertEqual(len((self.home / "starts").read_text().splitlines()), 1)
+
+
+class TheRootTheKeychainAndTheFolder(Start):
+    def test_a_root_without_a_readable_root_json_is_unknown(self) -> None:
+        self.refused("unknown_root", *ROUTE, "hi", root="nosuch")
+        self.assertEqual(os.listdir(roots_folder(self.home)), ["rct"])
+        for content in ("{", "[]", '{"rootContract": 1}', '{"database": "arbol_rct", "rootContract": "1"}'):
+            with self.subTest(content=content):
+                self.root_json(content)
+                self.refused("unknown_root", *ROUTE, "hi")
+
+    def test_a_root_whose_version_is_not_in_root_contracts_is_a_contract_mismatch(self) -> None:
+        self.assertEqual(ROOT_CONTRACTS, (1,))
+        for version in (2, 0, 999):
+            with self.subTest(version=version):
+                self.root_json({"database": "arbol_rct", "rootContract": version})
+                message = self.refused("contract_mismatch", *ROUTE, "hi")
+                self.assertIn(f"version {version}", message)
+        self.assertFalse((self.home / "security.args").exists(), "the Keychain was read")
+
+    def test_a_keychain_read_that_fails_is_refused_naming_the_keychain(self) -> None:
+        self.security = security_stand_in(self.home, status=51)
+        message = self.refused("database_unavailable", *ROUTE, "hi")
+        self.assertIn("Keychain", message)
+        self.assertEqual(self.database.connections, 0)
+
+    def test_a_keychain_read_that_gives_no_answer_within_2_seconds_is_refused_naming_the_keychain(self) -> None:
+        self.security = security_stand_in(self.home, sleep=30)
+        began = time.monotonic()
+        message = self.refused("database_unavailable", *ROUTE, "hi")
+        self.assertLess(time.monotonic() - began, 3.0)
+        self.assertIn("Keychain", message)
+        self.assertIn("2 seconds", message)
+        self.assertEqual(self.database.connections, 0)
+
+    def test_a_folder_that_cannot_be_made_is_trunk_failed_and_leaves_nothing_behind(self) -> None:
+        os.chmod(self.exchanges, 0o500)
+        try:
+            self.assertIn("folder", self.refused("trunk_failed", *ROUTE, "hi"))
+        finally:
+            os.chmod(self.exchanges, 0o700)
+        self.assertEqual(self.database.connections, 0)
+        os.rmdir(self.exchanges)
+        self.refused("trunk_failed", *ROUTE, "hi")
 
 
 if __name__ == "__main__":

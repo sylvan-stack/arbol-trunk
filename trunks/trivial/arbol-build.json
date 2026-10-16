@@ -1,0 +1,19 @@
+{
+  "component": "arbol-trunk/trivial",
+  "build": [
+    "uv sync --locked --group dev",
+    "uv run --no-sync ruff check src tests scripts bin/entry.py",
+    "uv run --no-sync mypy",
+    "uv run --no-sync python scripts/package_build.py"
+  ],
+  "entry": "bin/arbol-trunk-trivial",
+  "rootContracts": [1],
+  "checks": [
+    { "name": "unit", "kind": "unit",
+      "command": "\"$ARBOL_BUILD_DIR/runtime/python/bin/python3.14\" -I -B \"$ARBOL_BUILD_DIR/scripts/check_build.py\" unit" },
+    { "name": "contract-1", "kind": "contract",
+      "command": "\"$ARBOL_BUILD_DIR/runtime/python/bin/python3.14\" -I -B ~/repos/sylvan-stack/arbol-root/contract/conformance/bin/rct-conformance.py --trunk \"$ARBOL_BUILD_DIR/bin/arbol-trunk-trivial\" --root-contract 1" },
+    { "name": "live", "kind": "live",
+      "command": "\"$ARBOL_BUILD_DIR/runtime/python/bin/python3.14\" -I -B \"$ARBOL_BUILD_DIR/scripts/check_build.py\" live" }
+  ]
+}

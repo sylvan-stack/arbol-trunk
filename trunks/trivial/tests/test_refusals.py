@@ -20,6 +20,7 @@ from arbol_trunk_trivial.cli import start
 from arbol_trunk_trivial.database import Connect
 from arbol_trunk_trivial.root import roots_folder
 from arbol_trunk_trivial.run import Output
+from arbol_trunk_trivial.settings import settings_file
 from arbol_trunk_trivial.start import Prepared
 
 ROUTE = ("--driver", "claude", "--subscription", "anthropic", "--model", "sonnet")
@@ -168,6 +169,26 @@ class InvalidInput(Start):
             with self.subTest(body=body):
                 (self.home / "start.json").write_text(body)
                 self.refused("invalid_input", "--request", str(self.home / "start.json"))
+
+
+class NoDriver(Start):
+    def test_no_driver_handed_while_the_settings_file_names_none_names_the_file_and_its_key(self) -> None:
+        for content in (None, "{}", '{"driver": ""}', '{"driver": 1}', "["):
+            with self.subTest(content=content):
+                if content is not None:
+                    settings_file(self.home).parent.mkdir(parents=True, exist_ok=True)
+                    settings_file(self.home).write_text(content)
+                message = self.refused("invalid_input", "--subscription", "anthropic", "--model", "sonnet", "hi")
+                self.assertEqual(message, 'No Driver was handed, and ~/.arbol/arbol-trunk/trivial.json names none '
+                                          'under "driver".')
+        self.assertFalse((self.home / "security.args").exists(), "the Keychain was read")
+
+    def test_the_driver_of_the_settings_file_is_started_when_none_is_handed(self) -> None:
+        settings_file(self.home).parent.mkdir(parents=True)
+        settings_file(self.home).write_text('{"driver": "claude"}')
+        status, lines = self.start("hi")
+        self.assertEqual(json.loads(lines[0])["accepted"], True)
+        self.assertEqual(len((self.home / "starts").read_text().splitlines()), 1)
 
 
 if __name__ == "__main__":

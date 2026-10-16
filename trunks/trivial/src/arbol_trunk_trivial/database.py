@@ -20,6 +20,7 @@ from psycopg.types.json import Jsonb
 
 from . import NAME
 from .history import HistoryRow
+from .rows import Row
 
 CALL_SECONDS = 5.0
 
@@ -61,6 +62,8 @@ class Connection(Protocol):
     """The calls the Trunk makes on its Root's database."""
 
     async def accept(self, acceptance: Acceptance) -> Accepted: ...
+
+    async def save(self, row: Row) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -134,6 +137,11 @@ class PostgresConnection:
                 raise ChatBusy(await self.open_exchange(a.chat)) from None
             raise
         return Accepted(number, [HistoryRow(*row) for row in rows])
+
+    async def save(self, row: Row) -> None:
+        """One row, with an insert that does nothing when it is there, in a transaction of its own."""
+        sql, params = row.statement()
+        await within_limit(self.connection.execute(sql, params))
 
     async def open_exchange(self, chat: str) -> str | None:
         try:

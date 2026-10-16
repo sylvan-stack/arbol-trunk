@@ -8,6 +8,7 @@ from typing import Any
 
 from arbol_trunk_trivial.database import Acceptance, Accepted, ChatBusy, Connect, Connection, DatabaseUnavailable
 from arbol_trunk_trivial.history import HistoryRow
+from arbol_trunk_trivial.rows import MessageRow, Row, RunRow, ToolCallRow
 
 
 @dataclass
@@ -39,7 +40,9 @@ class FakeDatabase:
     connections: int = 0
     closed: int = 0
     fail_connect: int = 0  # the next n connects fail
+    fail_save: int = 0  # the next n saves fail
     delay: float = 0.0  # each call waits this long first
+    saves: list[Row] = field(default_factory=list)  # every row saved, in order, a row saved twice twice
 
     def connect(self) -> Connect:
         async def connect() -> Connection:
@@ -89,3 +92,21 @@ class FakeConnection:
                                            input=call["input"], ok=call["ok"], result=call.get("result"),
                                            error=call.get("error")))
         return Accepted(number, sorted(rows, key=lambda row: (row.number, row.position)))
+
+    async def save(self, row: Row) -> None:
+        await self._call()
+        db = self.database
+        if db.fail_save:
+            db.fail_save -= 1
+            raise DatabaseUnavailable("The fake database refused the call.")
+        db.saves.append(row)
+        if isinstance(row, MessageRow):
+            db.messages.setdefault((row.exchange, row.position), ("assistant", row.text))
+        elif isinstance(row, ToolCallRow):
+            db.tool_calls.setdefault((row.exchange, row.position), {
+                "name": row.name, "input": row.input, "ok": row.ok, "result": row.result, "error": row.error,
+                "parent_call_id": row.parent_call_id, "interrupted": row.interrupted, "run_id": row.run_id})
+        elif isinstance(row, RunRow):
+            db.runs.setdefault((row.exchange, row.run_id), {
+                "kind": row.kind, "outcome": row.outcome, "usage": row.usage, "error": row.error,
+                "started": row.started, "ended_at": row.ended_at})

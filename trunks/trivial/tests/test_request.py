@@ -4,12 +4,13 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from arbol_trunk_trivial.request import run_request, write_request
 
 EXCHANGE = "2d4f6a8c-1b3e-4c5d-8e7f-9a0b1c2d3e4f"
 CHAT = "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"
-HISTORY = [
+HISTORY: list[dict[str, Any]] = [
     {"type": "message", "role": "user", "text": "What does build.sh do?"},
     {"type": "message", "role": "assistant", "text": "Let me read it."},
     {"type": "tool_call", "name": "shell", "input": {"command": "cat build.sh"}, "ok": True,

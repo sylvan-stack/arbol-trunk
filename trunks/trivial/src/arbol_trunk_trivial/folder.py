@@ -21,6 +21,12 @@ FILE_MODE = 0o600
 FOLDER_MODE = 0o700
 FIXED = ("rootContract", "root", "exchange", "chat", "trunk", "build", "process", "route", "smallCallRoute",
          "workingFolder")
+ORDER = (*FIXED, "acceptedAt", "signsOfLife", "end")  # the order of RCT-1's example
+
+
+def ordered(record: dict[str, Any]) -> dict[str, Any]:
+    known = {name: record[name] for name in ORDER if name in record}
+    return {**known, **{name: value for name, value in record.items() if name not in known}}
 
 
 def write_file(path: Path, data: bytes) -> None:
@@ -79,7 +85,7 @@ class ExchangeFolder:
         changed = [name for name in fields if name in FIXED]
         if changed:
             raise ValueError(f"The record's {', '.join(changed)} never change.")
-        record = {**self.record, **fields}
+        record = ordered({**self.record, **fields})
         new = self.path / "record.json.new"
         write_file(new, encode(record) + b"\n")
         os.replace(new, self.path / "record.json")

@@ -8,10 +8,20 @@ seconds of the start, or the message is refused with `database_unavailable`; a b
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
 
+from . import CODE_NAME
+from .clock import iso
 from .database import Acceptance, Accepted, ChatBusy, Connect, Connection, DatabaseUnavailable
-from .errors import Refusal
+from .errors import Refusal, invalid
+from .folder import ExchangeFolder
+from .history import make_history
+from .start import Prepared
 
 ACCEPTANCE_SECONDS = 10.0  # from the start; not divided by ARBOL_TEST_TIME_SCALE (RCT-4)
 
@@ -45,3 +55,56 @@ async def accept_in_database(connect: Connect, acceptance: Acceptance,
 async def _close(connection: Connection | None) -> None:
     if connection is not None:
         await connection.close()
+
+
+def acceptance_line(*, root: str, exchange: str, chat: str, number: int, build: str, duplicate: bool = False) -> str:
+    """The one line that says the message was accepted (RCT-2, Accepted)."""
+    return json.dumps({"accepted": True, "duplicate": duplicate, "root": root, "exchange": exchange, "chat": chat,
+                       "number": number, "trunk": CODE_NAME, "build": build}, separators=(",", ":"))
+
+
+@dataclass
+class Exchange:
+    """An accepted Exchange: its folder, the connection the acceptance used, its number and the history it sends."""
+
+    folder: ExchangeFolder
+    connection: Connection
+    chat: str
+    number: int
+    message: str
+    history: list[dict[str, Any]]
+    line: str
+
+
+async def accept_message(prepared: Prepared, connect: Connect, *, build: str, process: dict[str, Any],
+                         started: float) -> Exchange:
+    """Steps 3 to 5 of RCT-2's acceptance: the folder with a record without `acceptedAt`, the transaction, then
+    `acceptedAt`. `started` is the start of the Trunk (time.monotonic()); a refusal leaves no folder behind."""
+    handed = prepared.handed
+    if handed.replaces is not None:
+        raise invalid("Sending a message again is not built yet.")
+    if handed.message is None:
+        raise invalid("No message was handed.")
+    exchange = handed.exchange or str(uuid.uuid4())
+    chat = handed.chat or str(uuid.uuid4())
+    record: dict[str, Any] = {"rootContract": prepared.root.root_contract, "root": prepared.root.identifier,
+                              "exchange": exchange, "chat": chat, "trunk": CODE_NAME, "build": build,
+                              "process": process, "route": handed.route}
+    if handed.small_call_route is not None:
+        record["smallCallRoute"] = handed.small_call_route
+    record["workingFolder"] = handed.working_folder
+    record["signsOfLife"] = {"heartbeat": 0, "waitingFor": "database", "since": iso()}
+    folder = ExchangeFolder.make(prepared.root.exchanges, exchange, record)
+    accepted_at = datetime.now(UTC)
+    try:
+        connection, accepted = await accept_in_database(connect, Acceptance(
+            exchange, chat, handed.message, CODE_NAME, build, handed.route, handed.small_call_route,
+            handed.working_folder, accepted_at), started + ACCEPTANCE_SECONDS)
+    except BaseException:
+        folder.discard()
+        raise
+    folder.update(acceptedAt=iso(accepted_at))
+    line = acceptance_line(root=prepared.root.identifier, exchange=exchange, chat=chat, number=accepted.number,
+                           build=build)
+    return Exchange(folder, connection, chat, accepted.number, handed.message,
+                    make_history(accepted.history, before=accepted.number), line)

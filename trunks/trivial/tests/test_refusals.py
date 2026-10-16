@@ -34,7 +34,7 @@ printf '%s\\n' "$*" >> "$STANDIN_LOG/starts"
 """
 
 
-class Start(unittest.TestCase):
+class StartTest(unittest.TestCase):
     """A home with the Root `rct`, `~/.arbol/database.json`, no Keychain item, the stand-in launcher on the search
     path and the fake database, in which a whole start runs."""
 
@@ -109,7 +109,7 @@ class Start(unittest.TestCase):
         return message
 
 
-class WholeStart(Start):
+class WholeStart(StartTest):
     def test_an_accepted_start_answers_with_the_acceptance_line_and_starts_the_driver(self) -> None:
         status, lines = self.start(*ROUTE, "hi")
         self.assertEqual(json.loads(lines[0])["accepted"], True)
@@ -120,7 +120,7 @@ class WholeStart(Start):
         self.refused("invalid_input", *ROUTE, "--bogus", "hi")
 
 
-class InvalidInput(Start):
+class InvalidInput(StartTest):
     """Refused from the options and the request file alone, before the Root, the settings or the Keychain is read."""
 
     def setUp(self) -> None:
@@ -174,7 +174,7 @@ class InvalidInput(Start):
                 self.refused("invalid_input", "--request", str(self.home / "start.json"))
 
 
-class NoDriver(Start):
+class NoDriver(StartTest):
     def test_no_driver_handed_while_the_settings_file_names_none_names_the_file_and_its_key(self) -> None:
         for content in (None, "{}", '{"driver": ""}', '{"driver": 1}', "["):
             with self.subTest(content=content):
@@ -194,7 +194,7 @@ class NoDriver(Start):
         self.assertEqual(len((self.home / "starts").read_text().splitlines()), 1)
 
 
-class TheRootTheKeychainAndTheFolder(Start):
+class TheRootTheKeychainAndTheFolder(StartTest):
     def test_a_root_without_a_readable_root_json_is_unknown(self) -> None:
         self.refused("unknown_root", *ROUTE, "hi", root="nosuch")
         self.assertEqual(os.listdir(roots_folder(self.home)), ["rct"])
@@ -238,7 +238,7 @@ class TheRootTheKeychainAndTheFolder(Start):
         self.refused("trunk_failed", *ROUTE, "hi")
 
 
-class TheDatabase(Start):
+class TheDatabaseAtAcceptance(StartTest):
     def test_a_server_that_cannot_be_reached_is_refused_as_unavailable(self) -> None:
         self.database.fail_connect = 1
         self.assertIn("cannot be reached", self.refused("database_unavailable", *ROUTE, "hi"))

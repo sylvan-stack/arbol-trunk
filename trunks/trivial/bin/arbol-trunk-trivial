@@ -1,0 +1,7 @@
+#!/bin/sh
+# The Trivial Trunk run from its checkout: the folder's own Python from `uv sync`, isolated from the caller's Python
+# settings, replacing this script so that the Trunk keeps the process identifier it was started with (RCT-2).
+# A Build carries an entry of its own that starts its own interpreter (TRV-0).
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$root/.venv/bin/python" -I -B "$root/bin/entry.py" "$@"

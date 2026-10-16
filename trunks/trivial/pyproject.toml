@@ -15,7 +15,7 @@ package = false
 python_version = "3.14"
 strict = true
 mypy_path = ["src"]
-files = ["src/arbol_trunk_trivial", "tests"]
+files = ["src/arbol_trunk_trivial", "tests", "bin/entry.py"]
 
 [tool.ruff]
 target-version = "py314"

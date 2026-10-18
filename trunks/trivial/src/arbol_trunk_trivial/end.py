@@ -52,10 +52,11 @@ def cancelled() -> End:
     return End("cancelled", datetime.now(UTC))
 
 
-def end_of_run(finished: dict[str, Any] | None) -> End:
-    """The end that the run's `finished` event gives, or `driver_failed` without one."""
+def end_of_run(finished: dict[str, Any] | None, *, stopped: bool = False) -> End:
+    """The end that the run's `finished` event gives; without one, `cancelled` for a run that was handed a stop line,
+    and else `driver_failed` (RCT-2.7)."""
     if finished is None:
-        return failed("driver_failed", NO_FINISHED)
+        return cancelled() if stopped else failed("driver_failed", NO_FINISHED)
     outcome = finished.get("outcome")
     if outcome in ("completed", "cancelled"):
         return End(str(outcome), datetime.now(UTC))

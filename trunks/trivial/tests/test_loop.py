@@ -15,6 +15,7 @@ from fakes import FakeDatabase
 
 from arbol_trunk_trivial.control import ControlFile
 from arbol_trunk_trivial.driver import DriverRun
+from arbol_trunk_trivial.end import end_of_run
 from arbol_trunk_trivial.events import EventsFile
 from arbol_trunk_trivial.rows import RowMaker
 from arbol_trunk_trivial.run import RunOver, drive
@@ -35,7 +36,7 @@ class LoopTest(unittest.TestCase):
         self.control = ControlFile(self.folder / "control")
         self.addCleanup(self.control.close)
         self.clock = MovedClock()
-        self.driver = ScriptedDriver(self.clock)
+        self.driver = ScriptedDriver(self.clock, control_file=self.folder / "control")
         environment = mock.patch.dict("os.environ")
         environment.start()
         self.addCleanup(environment.stop)
@@ -64,7 +65,7 @@ class Loop(LoopTest):
         self.assertEqual([line["n"] for line in self.lines()], [1, 2])
 
     def test_output_kept_open_after_the_exit_is_read_for_one_second_more(self) -> None:
-        self.driver = ScriptedDriver(self.clock, holds_output=True)
+        self.driver = ScriptedDriver(self.clock, holds_output=True, control_file=self.folder / "control")
         self.driver.at(0.2, "event", finished(1))
         self.driver.at(2.0, "exit", 0)
         self.driver.at(2.5, "event", event(2, "notice", code="late", message="Still read."))
@@ -86,6 +87,59 @@ class Loop(LoopTest):
         self.driver.at(1.0, "exit", 0)
         self.drive()
         self.assertEqual(max(self.driver.waits), 0.1)
+
+
+STOP = '{"type":"stop"}'
+
+
+class StoppingTheRun(LoopTest):
+    """TRV-0.11: a stop line on the control input, and SIGKILL for a Driver still alive 16 seconds after it."""
+
+    def end_when_stopped(self, after: float) -> None:
+        """The Driver finishes as cancelled and exits `after` seconds after it was handed a stop line."""
+        def on_control(line: str) -> None:
+            if json.loads(line).get("type") == "stop":
+                self.driver.after(after, "event", finished(9, "cancelled"))
+                self.driver.after(after + 0.1, "exit", 2)
+
+        self.driver.on_control = on_control
+
+    def test_a_driver_that_ends_after_its_stop_line_is_not_killed_and_the_exchange_is_cancelled(self) -> None:
+        self.driver.at(0.3, "event", event(1, "started"))
+        self.driver.at(0.5, "control", STOP)
+        self.end_when_stopped(2.0)
+        over = self.drive()
+        self.assertEqual(self.driver.control, [(0.5, STOP)])
+        self.assertIsNone(self.driver.killed_at)
+        self.assertEqual(self.clock.since_start(), 2.6)
+        self.assertTrue(over.stopped)
+        self.assertEqual(end_of_run(over.finished, stopped=over.stopped).state, "cancelled")
+
+    def test_a_driver_still_alive_16_seconds_after_its_stop_line_is_killed_then_and_not_later(self) -> None:
+        self.driver.at(0.3, "event", event(1, "started"))
+        self.driver.at(0.5, "control", STOP)
+        over = self.drive()
+        self.assertEqual(self.driver.control, [(0.5, STOP)])
+        self.assertEqual(self.driver.killed_at, 16.5)
+        self.assertEqual(self.clock.since_start(), 16.5)
+        self.assertTrue(all(wait <= 1.0 for wait in self.driver.waits))
+        self.assertIsNone(over.finished)
+        self.assertEqual(end_of_run(over.finished, stopped=over.stopped).state, "cancelled")
+
+    def test_the_16_seconds_count_from_the_first_stop_line_and_are_divided_by_the_time_scale(self) -> None:
+        os.environ["ARBOL_TEST_TIME_SCALE"] = "10"
+        self.driver.at(0.05, "control", STOP)
+        self.driver.at(1.0, "control", STOP)
+        self.drive()
+        self.assertEqual([line for _at, line in self.driver.control], [STOP, STOP])
+        self.assertEqual(self.driver.killed_at, 1.65)
+
+    def test_a_run_that_completed_before_the_stop_reached_it_keeps_its_outcome(self) -> None:
+        self.driver.at(0.5, "control", STOP)
+        self.driver.at(0.7, "event", finished(1, "completed"))
+        self.driver.at(0.8, "exit", 0)
+        over = self.drive()
+        self.assertEqual(end_of_run(over.finished, stopped=over.stopped).state, "completed")
 
 
 def append(path: Path, line: str) -> None:

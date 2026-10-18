@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from arbol_trunk_trivial.clock import Clock
@@ -30,11 +32,13 @@ class ScriptedDriver:
     """A Driver run that plays a timeline on a MovedClock: events, the end of its output and its exit, each at a time
     in seconds from the clock's start. A read waits by moving the clock, to the next item of the timeline or by the
     whole wait. `on_control` is called with each line written to the control input, `holds_output` keeps the output
-    open after the process has ended, as a child of the Driver would."""
+    open after the process has ended, as a child of the Driver would. A "control" item appends its line to
+    `control_file`, as a writer of `control` does."""
 
-    def __init__(self, clock: MovedClock, *, holds_output: bool = False) -> None:
+    def __init__(self, clock: MovedClock, *, holds_output: bool = False, control_file: Path | None = None) -> None:
         self.clock = clock
         self.holds_output = holds_output
+        self.control_file = control_file
         self.timeline: list[tuple[float, str, Any]] = []
         self.returncode: int | None = None
         self.output_ended = False
@@ -44,7 +48,8 @@ class ScriptedDriver:
         self.on_control: Callable[[str], None] | None = None
 
     def at(self, seconds: float, kind: str, value: Any = None) -> None:
-        """Adds an item at `seconds` from the clock's start: "event" (a dict), "end_output" or "exit" (a status)."""
+        """Adds an item at `seconds` from the clock's start: "event" (a dict), "end_output", "exit" (a status) or
+        "control" (a line for `control_file`)."""
         self.timeline.append((self.clock.start + seconds, kind, value))
         self.timeline.sort(key=lambda item: item[0])
 
@@ -71,6 +76,12 @@ class ScriptedDriver:
                 self.returncode = value
                 if not self.holds_output:
                     self.output_ended = True
+            elif kind == "control" and self.control_file is not None:
+                descriptor = os.open(self.control_file, os.O_WRONLY | os.O_APPEND)
+                try:
+                    os.write(descriptor, str(value).encode() + b"\n")
+                finally:
+                    os.close(descriptor)
         return lines
 
     def write_control(self, line: str) -> None:

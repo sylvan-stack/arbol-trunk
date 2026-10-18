@@ -35,6 +35,7 @@ from .start import Prepared
 
 ROUND_SECONDS = 1.0
 OUTPUT_AFTER_EXIT_SECONDS = 1.0
+STOP_SECONDS = 16.0  # from the stop line to SIGKILL, one second more than a Driver has for a stop (TRV-D8)
 
 
 class Output:
@@ -119,14 +120,16 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         await run.wait()  # the process has ended; this waits for no pipe (gh-119710)
     finally:
         control.close()
-    return end_of_run(over.finished)
+    return end_of_run(over.finished, stopped=over.stopped)
 
 
 @dataclass(frozen=True)
 class RunOver:
-    """What the loop knew when the run was over: the run's `finished` event, when it came."""
+    """What the loop knew when the run was over: the run's `finished` event, when it came, and whether a stop line was
+    handed to it."""
 
     finished: dict[str, Any] | None
+    stopped: bool = False
 
 
 async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, control: ControlFile | None = None,
@@ -134,13 +137,20 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
     """The rounds of the loop for one run, until the run is over: its Driver's process has ended and its output has
     been read to the end, for at most one second after the process ended (TRV-0, "Stopping the run"). Each round waits
     at most one second for output, appends what arrived, and hands each new `stop` and `answer` line of `control`
-    unchanged to the run's control input, without waiting for the Driver to take it (RCT-1.7)."""
+    unchanged to the run's control input, without waiting for the Driver to take it (RCT-1.7). A Driver still alive
+    16 seconds after the first stop line it was handed is ended with SIGKILL; each round checks that time and waits
+    past it for nothing (TRV-D8)."""
     finished: dict[str, Any] | None = None
     exited_at: float | None = None
+    stopped_at: float | None = None
+    killed = False
     while True:
         wait = scaled(ROUND_SECONDS)
         if exited_at is not None:
             wait = min(wait, max(exited_at + scaled(OUTPUT_AFTER_EXIT_SECONDS) - clock.now(), 0.0))
+        kill_at = None if killed or stopped_at is None else stopped_at + scaled(STOP_SECONDS)
+        if kill_at is not None and run.returncode is None:
+            wait = min(wait, max(kill_at - clock.now(), 0.0))
         for line in await run.read(wait):
             n = events.append_event(line)
             saver.add(maker.take(n, line.event))
@@ -148,10 +158,16 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
                 finished = line.event
         for handed in control.read() if control is not None else []:
             run.write_control(handed.text)
+            if handed.kind == "stop" and stopped_at is None:
+                stopped_at = clock.now()
+        kill_at = None if killed or stopped_at is None else stopped_at + scaled(STOP_SECONDS)
+        if kill_at is not None and run.returncode is None and clock.now() >= kill_at:
+            run.kill()
+            killed = True
         if run.returncode is not None:
             if run.output_ended:
                 break
             exited_at = clock.now() if exited_at is None else exited_at
             if clock.now() >= exited_at + scaled(OUTPUT_AFTER_EXIT_SECONDS):
                 break
-    return RunOver(finished)
+    return RunOver(finished, stopped_at is not None)

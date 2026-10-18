@@ -30,3 +30,14 @@ def scaled(seconds: float) -> float:
 def uptime() -> float:
     """CLOCK_UPTIME_RAW: it stands still while the Mac sleeps (RCT-1)."""
     return time.clock_gettime(time.CLOCK_UPTIME_RAW)
+
+
+class Clock:
+    """The clock the loop counts the times of a run with (TRV-0, "Stopping the run"): CLOCK_UPTIME_RAW. A unit test
+    gives a clock of its own, which it moves."""
+
+    def now(self) -> float:
+        return uptime()
+
+
+UPTIME = Clock()

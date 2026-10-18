@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from .accept import Exchange, accept_message
-from .clock import scaled, uptime
+from .clock import UPTIME, Clock, scaled
 from .database import Connect
 from .detach import detach
-from .driver import DriverRun, find_launcher, launcher_name
+from .driver import Driver, DriverRun, find_launcher, launcher_name
 from .end import End, end_of_run, failed, finish, write_end
 from .errors import Refusal
 from .events import EventsFile
@@ -107,21 +108,38 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         run = await DriverRun.start(launcher, request_file, prepared.handed.working_folder)
     except OSError as error:
         return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
+    over = await drive(run, events, maker, saver)
+    run.close_control()
+    await run.wait()  # the process has ended; this waits for no pipe (gh-119710)
+    return end_of_run(over.finished)
+
+
+@dataclass(frozen=True)
+class RunOver:
+    """What the loop knew when the run was over: the run's `finished` event, when it came."""
+
+    finished: dict[str, Any] | None
+
+
+async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, clock: Clock = UPTIME) -> RunOver:
+    """The rounds of the loop for one run, until the run is over: its Driver's process has ended and its output has
+    been read to the end, for at most one second after the process ended (TRV-0, "Stopping the run"). Each round waits
+    at most one second for output, and appends what arrived."""
     finished: dict[str, Any] | None = None
     exited_at: float | None = None
     while True:
-        batch = await run.read(scaled(ROUND_SECONDS))
-        if batch is None:
-            break
-        for line in batch:
+        wait = scaled(ROUND_SECONDS)
+        if exited_at is not None:
+            wait = min(wait, max(exited_at + scaled(OUTPUT_AFTER_EXIT_SECONDS) - clock.now(), 0.0))
+        for line in await run.read(wait):
             n = events.append_event(line)
             saver.add(maker.take(n, line.event))
             if line.event.get("type") == "finished" and finished is None:
                 finished = line.event
-        if run.process.returncode is not None:
-            exited_at = exited_at if exited_at is not None else uptime()
-            if uptime() - exited_at >= scaled(OUTPUT_AFTER_EXIT_SECONDS):
+        if run.returncode is not None:
+            if run.output_ended:
                 break
-    run.close_control()
-    await run.wait()
-    return end_of_run(finished)
+            exited_at = clock.now() if exited_at is None else exited_at
+            if clock.now() >= exited_at + scaled(OUTPUT_AFTER_EXIT_SECONDS):
+                break
+    return RunOver(finished)

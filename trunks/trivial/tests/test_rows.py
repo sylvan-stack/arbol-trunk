@@ -103,5 +103,60 @@ class Rows(unittest.TestCase):
         self.assertEqual(rows[0].statement()[1], (X, 3, "Let me read it."))
 
 
+ASK = {"callId": "call_2", "questions": [{"id": "branch", "question": "Which branch?", "multiple": False,
+                                          "options": [{"label": "main"}, {"label": "dev"}]}]}
+MAIN = {"type": "answers", "answers": {"branch": ["main"]}}
+DEV = {"type": "answers", "answers": {"branch": ["dev"]}}
+
+
+def asked(seq: int, kind: str, **fields: Any) -> dict[str, Any]:
+    return {"runId": RUN, "seq": seq, "at": "2026-10-15T09:31:00.000Z", "type": kind, **fields}
+
+
+class Questions(unittest.TestCase):
+    """The row of a question holds `ask` and `answer` (RCT-3, "How lines become rows")."""
+
+    def rows(self, lines: list[dict[str, Any] | tuple[str, dict[str, Any]]]) -> tuple[RowMaker, list[Any]]:
+        maker = RowMaker(X)
+        rows: list[Any] = []
+        for n, line in enumerate(lines, 1):
+            rows += maker.take_answer(line[1]) if isinstance(line, tuple) else maker.take(n, line)
+        return maker, rows
+
+    def opened(self) -> list[dict[str, Any] | tuple[str, dict[str, Any]]]:
+        return [asked(1, "tool_started", callId="call_2", name="ask_user", input={"questions": ASK["questions"]}),
+                asked(2, "ask_opened", askId="ask_3", ask=ASK)]
+
+    def finish(self, seq: int) -> dict[str, Any]:
+        return asked(seq, "tool_finished", callId="call_2", ok=True, result=MAIN)
+
+    def test_the_row_holds_the_question_and_its_answer(self) -> None:
+        _maker, rows = self.rows([*self.opened(), ("answer", {"type": "answer", "askId": "ask_3", "answer": MAIN}),
+                                  asked(4, "ask_closed", askId="ask_3", reason="answered"), self.finish(5)])
+        [row] = rows
+        self.assertEqual((row.position, row.name, row.ask, row.answer), (1, "ask_user", ASK, MAIN))
+
+    def test_the_answer_is_the_last_one_that_no_control_refused_follows(self) -> None:
+        refused = asked(4, "control_refused", askId="ask_3", error={"code": "invalid_input", "message": "No."})
+        _maker, rows = self.rows([*self.opened(), ("answer", {"type": "answer", "askId": "ask_3", "answer": MAIN}),
+                                  refused, ("answer", {"type": "answer", "askId": "ask_3", "answer": DEV}),
+                                  self.finish(6)])
+        self.assertEqual(rows[0].answer, DEV)
+        _maker, rows = self.rows([*self.opened(), ("answer", {"type": "answer", "askId": "ask_3", "answer": MAIN}),
+                                  ("answer", {"type": "answer", "askId": "ask_3", "answer": DEV}), refused,
+                                  self.finish(6)])
+        self.assertIsNone(rows[0].answer)
+
+    def test_another_call_and_an_answer_to_another_question_leave_ask_and_answer_null(self) -> None:
+        _maker, rows = self.rows([*LINES[3:5], ("answer", {"type": "answer", "askId": "ask_9", "answer": MAIN})])
+        self.assertEqual((rows[0].ask, rows[0].answer), (None, None))
+
+    def test_a_question_the_end_cut_off_keeps_its_ask_and_has_no_answer(self) -> None:
+        maker, _rows = self.rows(self.opened())
+        [row] = [row for row in maker.at_end() if isinstance(row, ToolCallRow)]
+        self.assertEqual((row.interrupted, row.ask, row.answer), (True, ASK, None))
+        self.assertEqual(plain(row.statement()[1])[12:], [ASK, None])
+
+
 if __name__ == "__main__":
     unittest.main()

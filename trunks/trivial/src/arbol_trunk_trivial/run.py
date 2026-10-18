@@ -168,6 +168,7 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
                 continue
             if handed.kind == "answer":
                 events.append_answer(handed.text)
+                saver.add(maker.take_answer(handed.value))
             elif stopped_at is None:
                 stopped_at = clock.now()
         kill_at = kill_time()

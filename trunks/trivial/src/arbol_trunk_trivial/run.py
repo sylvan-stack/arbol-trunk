@@ -20,6 +20,7 @@ from typing import Any
 
 from .accept import Exchange, accept_message
 from .clock import UPTIME, Clock, scaled
+from .control import ControlFile
 from .database import Connect
 from .detach import detach
 from .driver import Driver, DriverRun, find_launcher, launcher_name
@@ -104,13 +105,17 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
                           working_folder=prepared.handed.working_folder, history=exchange.history,
                           message=exchange.message)
     request_file = write_request(folder.path, request)
+    control = ControlFile(folder.path / "control")
     try:
-        run = await DriverRun.start(launcher, request_file, prepared.handed.working_folder)
-    except OSError as error:
-        return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
-    over = await drive(run, events, maker, saver)
-    run.close_control()
-    await run.wait()  # the process has ended; this waits for no pipe (gh-119710)
+        try:
+            run = await DriverRun.start(launcher, request_file, prepared.handed.working_folder)
+        except OSError as error:
+            return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
+        over = await drive(run, events, maker, saver, control)
+        run.close_control()
+        await run.wait()  # the process has ended; this waits for no pipe (gh-119710)
+    finally:
+        control.close()
     return end_of_run(over.finished)
 
 
@@ -121,10 +126,12 @@ class RunOver:
     finished: dict[str, Any] | None
 
 
-async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, clock: Clock = UPTIME) -> RunOver:
+async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, control: ControlFile | None = None,
+                clock: Clock = UPTIME) -> RunOver:
     """The rounds of the loop for one run, until the run is over: its Driver's process has ended and its output has
     been read to the end, for at most one second after the process ended (TRV-0, "Stopping the run"). Each round waits
-    at most one second for output, and appends what arrived."""
+    at most one second for output, appends what arrived, and hands each new `stop` and `answer` line of `control`
+    unchanged to the run's control input, without waiting for the Driver to take it (RCT-1.7)."""
     finished: dict[str, Any] | None = None
     exited_at: float | None = None
     while True:
@@ -136,6 +143,8 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
             saver.add(maker.take(n, line.event))
             if line.event.get("type") == "finished" and finished is None:
                 finished = line.event
+        for handed in control.read() if control is not None else []:
+            run.write_control(handed.text)
         if run.returncode is not None:
             if run.output_ended:
                 break

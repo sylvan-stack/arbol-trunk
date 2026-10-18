@@ -84,10 +84,11 @@ class ScriptedDriver:
                     os.close(descriptor)
         return lines
 
-    def write_control(self, line: str) -> None:
+    def write_control(self, line: str) -> bool:
         self.control.append((self.clock.since_start(), line))
         if self.on_control is not None:
             self.on_control(line)
+        return True
 
     def kill(self) -> None:
         if self.returncode is None:

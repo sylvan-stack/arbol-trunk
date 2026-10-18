@@ -137,7 +137,8 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
     """The rounds of the loop for one run, until the run is over: its Driver's process has ended and its output has
     been read to the end, for at most one second after the process ended (TRV-0, "Stopping the run"). Each round waits
     at most one second for output, appends what arrived, and hands each new `stop` and `answer` line of `control`
-    unchanged to the run's control input, without waiting for the Driver to take it (RCT-1.7). A Driver still alive
+    unchanged to the run's control input, without waiting for the Driver to take it (RCT-1.7); an answer handed on is
+    appended to `events.jsonl` (RCT-1.11). A Driver still alive
     16 seconds after the first stop line it was handed, or after its `finished` when that came first, is ended with
     SIGKILL; each round checks that time and waits past it for nothing (TRV-D8)."""
     finished: dict[str, Any] | None = None
@@ -163,8 +164,11 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
             if line.event.get("type") == "finished" and finished is None:
                 finished, finished_at = line.event, clock.now()
         for handed in control.read() if control is not None else []:
-            run.write_control(handed.text)
-            if handed.kind == "stop" and stopped_at is None:
+            if not run.write_control(handed.text):
+                continue
+            if handed.kind == "answer":
+                events.append_answer(handed.text)
+            elif stopped_at is None:
                 stopped_at = clock.now()
         kill_at = kill_time()
         if kill_at is not None and run.returncode is None and clock.now() >= kill_at:

@@ -162,6 +162,30 @@ class StoppingTheRun(LoopTest):
         self.assertEqual(end_of_run(over.finished, stopped=over.stopped).state, "completed")
 
 
+class Answers(LoopTest):
+    def test_each_answer_handed_on_is_appended_exactly_as_it_was_in_control(self) -> None:
+        answer = '{"askId" : "ask_2", "type":"answer",  "answer":{"type":"answers","answers":{"branch":["main"]}}}'
+        self.driver.at(0.2, "event", event(1, "started"))
+        self.driver.at(0.3, "event", event(2, "ask_opened", askId="ask_2", ask={"callId": "call_1", "questions": []}))
+        self.driver.at(0.4, "control", answer)
+        self.driver.at(1.5, "event", event(3, "ask_closed", askId="ask_2", reason="answered"))
+        self.driver.at(1.6, "event", finished(4))
+        self.driver.at(1.7, "exit", 0)
+        self.drive()
+        self.assertEqual([line for _at, line in self.driver.control], [answer])
+        raw = (self.folder / "events.jsonl").read_text().splitlines()
+        self.assertEqual(raw[2], '{"n":3,"answer":' + answer + "}")
+        self.assertEqual([json.loads(line)["n"] for line in raw], [1, 2, 3, 4, 5])
+        self.assertEqual(json.loads(raw[3])["event"]["type"], "ask_closed")
+
+    def test_an_answer_that_could_not_be_handed_on_is_not_appended(self) -> None:
+        self.driver.write_control = lambda line: False  # type: ignore[method-assign]
+        self.driver.at(0.2, "control", '{"type":"answer","askId":"ask_1","answer":{"type":"decline"}}')
+        self.driver.at(0.5, "exit", 0)
+        self.drive()
+        self.assertEqual(self.lines(), [])
+
+
 def append(path: Path, line: str) -> None:
     """One line appended with one write, as a writer of `control` appends it (RCT-1.8)."""
     descriptor = os.open(path, os.O_WRONLY | os.O_APPEND)
@@ -198,10 +222,11 @@ class HandingOn(LoopTest):
             run = await DriverRun.start(str(launcher), self.folder / "run-1.json", str(self.folder))
             write = run.write_control
 
-            def timed(line: str) -> None:
+            def timed(line: str) -> bool:
                 began = time.monotonic()
-                write(line)
+                handed = write(line)
                 writes.append(time.monotonic() - began)
+                return handed
 
             run.write_control = timed  # type: ignore[method-assign]
             over = await drive(run, self.events, RowMaker("x"), Saver(FakeDatabase().connect()), self.control)

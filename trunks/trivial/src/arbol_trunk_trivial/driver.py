@@ -72,7 +72,7 @@ class Driver(Protocol):
 
     async def read(self, seconds: float) -> list[Line]: ...
 
-    def write_control(self, line: str) -> None: ...
+    def write_control(self, line: str) -> bool: ...
 
     def kill(self) -> None: ...
 
@@ -136,10 +136,13 @@ class DriverRun:
             for line in await self.read(3600):
                 yield line
 
-    def write_control(self, line: str) -> None:
-        """Writes one line to the control input without waiting; what the Driver has not taken yet is kept."""
-        if self.process.stdin is not None and not self.process.stdin.is_closing():
-            self.process.stdin.write(line.encode("utf-8") + b"\n")
+    def write_control(self, line: str) -> bool:
+        """Writes one line to the control input without waiting; what the Driver has not taken yet is kept. False when
+        the control input is closed, and the line was not handed on."""
+        if self.process.stdin is None or self.process.stdin.is_closing():
+            return False
+        self.process.stdin.write(line.encode("utf-8") + b"\n")
+        return True
 
     def kill(self) -> None:
         """SIGKILL to the Driver's process, when it still lives."""

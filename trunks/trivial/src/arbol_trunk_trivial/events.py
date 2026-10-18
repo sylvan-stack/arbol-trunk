@@ -1,7 +1,8 @@
 """The answer as it arrives: `events.jsonl` (RCT-1).
 
 One line for each event of the run, `{"n", "event"}`, with the event exactly as the Driver wrote it and `n` counting
-from 1 without gaps; last, one line with the end. Only the Trunk writes the file, and each line is appended whole, with
+from 1 without gaps; one line for each answer of `control` handed to the run, `{"n", "answer"}`, exactly as it was in
+`control`; last, one line with the end. Only the Trunk writes the file, and each line is appended whole, with
 one write, ending with a newline, before anything is saved from it.
 """
 
@@ -31,6 +32,13 @@ class EventsFile:
         """Appends the event under the next `n`, and gives that `n`."""
         n = self.n + 1
         self._append(b'{"n":%d,"event":%s}\n' % (n, line.text.encode("utf-8", "surrogatepass")))
+        self.n = n
+        return n
+
+    def append_answer(self, text: str) -> int:
+        """Appends an answer line of `control` that was handed to the run, exactly as it was there (RCT-1.11)."""
+        n = self.n + 1
+        self._append(b'{"n":%d,"answer":%s}\n' % (n, text.encode("utf-8", "surrogatepass")))
         self.n = n
         return n
 

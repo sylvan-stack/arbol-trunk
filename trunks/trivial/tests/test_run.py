@@ -7,6 +7,7 @@ import os
 import tempfile
 import time
 import unittest
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -52,6 +53,18 @@ PLAIN = [
      "unfinishedCalls": []},
 ]
 
+# A launcher that starts a shell call and waits for a line on its control input; on a stop line it finishes the call as
+# interrupted and the run as cancelled, as a Driver does (DRV-2), and keeps the line it got.
+STOPPABLE = """#!/bin/sh
+run=$(sed -n 's/.*"runId":"\\([^"]*\\)".*/\\1/p' "$4")
+printf '%s\\n' '{"runId":"'"$run"'","seq":1,"type":"started","continuity":"fresh","subscriptionId":"s","toolVersion":"t","driverBuild":"0"}'
+printf '%s\\n' '{"runId":"'"$run"'","seq":2,"type":"tool_started","callId":"call_1","name":"shell","input":{"command":"make"}}'
+IFS= read -r line
+printf '%s\\n' "$line" > "$STANDIN_LOG/control"
+printf '%s\\n' '{"runId":"'"$run"'","seq":3,"type":"tool_finished","callId":"call_1","ok":false,"error":"Stopped.","interrupted":true}'
+printf '%s\\n' '{"runId":"'"$run"'","seq":4,"type":"finished","outcome":"cancelled","producedOutput":false,"unfinishedCalls":[]}'
+"""
+
 
 class WholeExchange(unittest.TestCase):
     def setUp(self) -> None:
@@ -78,7 +91,9 @@ class WholeExchange(unittest.TestCase):
     def events(self, events: list[dict[str, Any]]) -> None:
         (self.log / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
 
-    def run_trunk(self, *args: str, small: dict[str, str] | None = None) -> tuple[int, list[str]]:
+    def run_trunk(self, *args: str, small: dict[str, str] | None = None,
+                  during: Callable[[], Awaitable[None]] | None = None) -> tuple[int, list[str]]:
+        """Runs `run` to its end; `during` runs beside it, from its start."""
         lines: list[str] = []
         request = {"smallCallRoute": small} if small else {}
         file = self.home / "start.json"
@@ -88,10 +103,33 @@ class WholeExchange(unittest.TestCase):
         with mock.patch.dict("os.environ", environment):
             prepared = prepare(handed(parse(["--root", "rct", "run", "--request", str(file), *args]),
                                       started_in=str(self.work)), self.home, self.security)
-            status = asyncio.run(run_exchange(
-                prepared, self.database.connect(), build="0", process={"pid": 1, "startedAt": "x"},
-                started=time.monotonic(), output=Output(lines.append), search_path=f"{self.bin}:/usr/bin:/bin"))
+
+            async def go() -> int:
+                beside = asyncio.ensure_future(during()) if during is not None else None
+                status = await run_exchange(
+                    prepared, self.database.connect(), build="0", process={"pid": 1, "startedAt": "x"},
+                    started=time.monotonic(), output=Output(lines.append), search_path=f"{self.bin}:/usr/bin:/bin")
+                if beside is not None:
+                    await beside
+                return status
+
+            status = asyncio.run(go())
         return status, lines
+
+    def stop_when_the_folder_is_there(self, exchange: str) -> Callable[[], Awaitable[None]]:
+        """Appends a stop line to the Exchange's `control` as soon as it is in place, as a writer does (RCT-1.8)."""
+        control = self.root / "exchanges" / exchange / "control"
+
+        async def stop() -> None:
+            while not control.exists():
+                await asyncio.sleep(0.005)
+            descriptor = os.open(control, os.O_WRONLY | os.O_APPEND)
+            try:
+                os.write(descriptor, b'{"type":"stop"}\n')
+            finally:
+                os.close(descriptor)
+
+        return stop
 
     def test_a_plain_answer_from_the_message_to_its_end(self) -> None:
         status, lines = self.run_trunk("--exchange", FIRST, "--chat", CHAT, "--driver", "claude", "--subscription",
@@ -177,6 +215,44 @@ class WholeExchange(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(self.database.exchanges[FIRST].error, error)
         self.assertEqual(len((self.log / "starts").read_text().splitlines()), 1)
+
+    def test_after_a_stop_line_before_the_run_no_run_starts_and_the_exchange_is_cancelled(self) -> None:
+        self.database.delay = 0.3  # the acceptance takes a while; the stop line comes meanwhile
+        status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi",
+                                       during=self.stop_when_the_folder_is_there(FIRST))
+        self.assertEqual(status, 2)
+        self.assertEqual(json.loads(lines[0])["accepted"], True)
+        self.assertFalse((self.log / "starts").exists())
+        self.assertEqual(self.database.exchanges[FIRST].state, "cancelled")
+        self.assertEqual(self.database.runs, {})
+        self.assertEqual(os.listdir(self.root / "exchanges"), [])
+
+    def test_a_stop_line_while_a_tool_call_runs_cancels_the_exchange_and_saves_the_call_as_interrupted(self) -> None:
+        (self.bin / "arbol-claude-driver").write_text(STOPPABLE)
+        folder = self.root / "exchanges" / FIRST
+        written: list[float] = []
+
+        async def stop_once_the_call_runs() -> None:
+            while b"tool_started" not in ((folder / "events.jsonl").read_bytes() if folder.exists() else b""):
+                await asyncio.sleep(0.005)
+            descriptor = os.open(folder / "control", os.O_WRONLY | os.O_APPEND)
+            try:
+                os.write(descriptor, b'{"type": "stop"}\n')
+            finally:
+                os.close(descriptor)
+            written.append(time.monotonic())
+
+        status, _lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi",
+                                        during=stop_once_the_call_runs)
+        ended = time.monotonic()
+        self.assertEqual(status, 2)
+        self.assertEqual((self.log / "control").read_text(), '{"type": "stop"}\n')
+        self.assertLess(ended - written[0], 1.8)  # the 18 seconds of RCT-2.7, divided by the time scale of 10
+        self.assertEqual(self.database.exchanges[FIRST].state, "cancelled")
+        call = self.database.tool_calls[(FIRST, 2)]
+        self.assertEqual((call["name"], call["ok"], call["interrupted"]), ("shell", False, True))
+        self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["outcome"], "cancelled")
+        self.assertEqual(os.listdir(self.root / "exchanges"), [])
 
     def test_a_whole_start_reads_no_settings_file_but_its_own(self) -> None:
         settings_file(self.home).parent.mkdir(parents=True)

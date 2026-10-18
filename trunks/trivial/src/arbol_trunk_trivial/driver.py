@@ -10,14 +10,17 @@ however long a line is, and a line that is not an event is dropped.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 READ_SIZE = 65536
+EXIT_POLL_SECONDS = 0.01
 
 
 def launcher_name(driver: str) -> str:
@@ -58,6 +61,22 @@ def as_event(raw: bytes) -> Line | None:
     return Line(text, value)
 
 
+class Driver(Protocol):
+    """What the loop needs of a Driver run: its output, its control input, and its process."""
+
+    @property
+    def returncode(self) -> int | None: ...
+
+    @property
+    def output_ended(self) -> bool: ...
+
+    async def read(self, seconds: float) -> list[Line]: ...
+
+    def write_control(self, line: str) -> bool: ...
+
+    def kill(self) -> None: ...
+
+
 class DriverRun:
     """The Driver's process, its control input and its output."""
 
@@ -77,11 +96,22 @@ class DriverRun:
     def pid(self) -> int:
         return self.process.pid
 
-    async def read(self, seconds: float) -> list[Line] | None:
-        """The event lines that arrive within `seconds`; None once the output has ended and every line is read."""
+    @property
+    def returncode(self) -> int | None:
+        """The exit status once the process has ended, whether or not its output is read to the end."""
+        return self.process.returncode
+
+    @property
+    def output_ended(self) -> bool:
+        return self._ended
+
+    async def read(self, seconds: float) -> list[Line]:
+        """The event lines that arrive within `seconds`. Once the output has ended, it waits at most `seconds` for the
+        process to end, without waiting for its pipes, which a child of the Driver may still hold open."""
         assert self.process.stdout is not None
         if self._ended:
-            return None
+            await self._exit(seconds)
+            return []
         try:
             chunk = await asyncio.wait_for(self.process.stdout.read(READ_SIZE), seconds)
         except TimeoutError:
@@ -90,21 +120,35 @@ class DriverRun:
             self._ended = True
             rest, self._buffer = self._buffer, b""
             line = as_event(rest) if rest.strip() else None
-            return [line] if line else None
+            return [line] if line else []
         self._buffer += chunk
         *whole, self._buffer = self._buffer.split(b"\n")
         return [line for line in (as_event(raw) for raw in whole) if line is not None]
 
+    async def _exit(self, seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while self.process.returncode is None and (remaining := deadline - time.monotonic()) > 0:
+            await asyncio.sleep(min(remaining, EXIT_POLL_SECONDS))
+
     async def lines(self) -> AsyncIterator[Line]:
         """Every event line, until the output ends."""
-        while (batch := await self.read(3600)) is not None:
-            for line in batch:
+        while not self._ended:
+            for line in await self.read(3600):
                 yield line
 
-    def write_control(self, line: str) -> None:
-        """Writes one line to the control input without waiting; what the Driver has not taken yet is kept."""
-        if self.process.stdin is not None and not self.process.stdin.is_closing():
-            self.process.stdin.write(line.encode("utf-8") + b"\n")
+    def write_control(self, line: str) -> bool:
+        """Writes one line to the control input without waiting; what the Driver has not taken yet is kept. False when
+        the control input is closed, and the line was not handed on."""
+        if self.process.stdin is None or self.process.stdin.is_closing():
+            return False
+        self.process.stdin.write(line.encode("utf-8") + b"\n")
+        return True
+
+    def kill(self) -> None:
+        """SIGKILL to the Driver's process, when it still lives."""
+        if self.process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                self.process.kill()
 
     async def wait(self) -> int:
         return await self.process.wait()

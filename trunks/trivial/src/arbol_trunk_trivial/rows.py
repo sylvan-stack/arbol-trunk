@@ -6,7 +6,9 @@
 | a `tool_started` event              | `tool_calls`, written with its `tool_finished`              | the n of the tool_started  |
 | a `finished` event                  | `runs`, kind agent, with its usage and its `started` event  | —                          |
 
-Every row is written with an insert that does nothing when the row is already there. At the end, a call without its
+The row of a question also holds `ask` from the `ask_opened` that names its call, and `answer` from the last `answer`
+line for that question that no `control_refused` for it follows. Every row is written with an insert that does nothing
+when the row is already there. At the end, a call without its
 `tool_finished` is written as interrupted, and a run without its `finished` as interrupted, with its last usage and the
 time of its last line.
 """
@@ -111,6 +113,8 @@ class RowMaker:
         self.last_at: dict[str, Any] = {}
         self.finished: set[str] = set()
         self.seen: list[str] = []  # the runs that gave an event, in order
+        self.asks: dict[tuple[str, str], tuple[str, Any]] = {}  # (runId, callId) to the askId and ask of its question
+        self.answers: dict[str, Any] = {}  # askId to the answer its last answer line carried
 
     def take(self, n: int, event: dict[str, Any]) -> list[Row]:
         run_id = text(event.get("runId")) or ""
@@ -127,13 +131,20 @@ class RowMaker:
             return [MessageRow(self.exchange, n, event["text"])]
         elif kind == "tool_started" and isinstance(event.get("callId"), str):
             self.calls[(run_id, event["callId"])] = (n, event)
+        elif kind == "ask_opened" and isinstance(event.get("askId"), str) and isinstance(event.get("ask"), dict):
+            call = event["ask"].get("callId")
+            if isinstance(call, str):
+                self.asks[(run_id, call)] = (event["askId"], event["ask"])
+        elif kind == "control_refused" and isinstance(event.get("askId"), str):
+            self.answers.pop(event["askId"], None)
         elif kind == "tool_finished" and (run_id, event.get("callId")) in self.calls:
             position, started = self.calls.pop((run_id, str(event.get("callId"))))
+            ask, answer = self.question(run_id, str(started["callId"]))
             return [ToolCallRow(self.exchange, position, run_id, str(started["callId"]),
                                 text(started.get("parentCallId")), str(started.get("name", "")),
                                 started.get("input"), event.get("ok") is True, event.get("result"),
                                 text(event.get("error")), event.get("truncated") is True,
-                                event.get("interrupted") is True)]
+                                event.get("interrupted") is True, ask, answer)]
         elif kind == "finished" and run_id not in self.finished:
             self.finished.add(run_id)
             said = event.get("outcome")
@@ -147,15 +158,30 @@ class RowMaker:
                            moment(event.get("at")))]
         return []
 
+    def take_answer(self, value: dict[str, Any]) -> list[Row]:
+        """An `answer` line handed to the run: it makes no row of its own, and is kept for its question's row."""
+        if isinstance(value.get("askId"), str):
+            self.answers[value["askId"]] = value.get("answer")
+        return []
+
+    def question(self, run_id: str, call_id: str) -> tuple[Any, Any]:
+        """The ask and the answer of the question a call carries, (None, None) for any other call."""
+        found = self.asks.get((run_id, call_id))
+        if found is None:
+            return None, None
+        ask_id, ask = found
+        return ask, self.answers.get(ask_id)
+
     def at_end(self, run_ids: list[str] | None = None) -> list[Row]:
         """The rows the end makes due: a call without its `tool_finished` as interrupted, and each run that gave an
         event (or each of `run_ids`) without its `finished` as interrupted, with its last usage and the time of its
         last line."""
         rows: list[Row] = []
         for (run_id, call_id), (position, started) in sorted(self.calls.items(), key=lambda item: item[1][0]):
+            ask, answer = self.question(run_id, call_id)
             rows.append(ToolCallRow(self.exchange, position, run_id, call_id, text(started.get("parentCallId")),
                                     str(started.get("name", "")), started.get("input"), False,
-                                    error=INTERRUPTED_CALL, interrupted=True))
+                                    error=INTERRUPTED_CALL, interrupted=True, ask=ask, answer=answer))
         self.calls.clear()
         for run_id in self.seen if run_ids is None else run_ids:
             if run_id not in self.finished:

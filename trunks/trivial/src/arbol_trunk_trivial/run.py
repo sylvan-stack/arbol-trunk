@@ -2,7 +2,8 @@
 
 1. It accepts the message as RCT-2 says, reading the history in the same transaction.
 2. It writes the request of the run, `run-1.json`, into the Exchange's folder.
-3. It starts the Driver through its launcher, as `run` with a control input and the request file.
+3. It starts the Driver through its launcher, as `run` with a control input and the request file. Just before, it reads
+   `control`: after a stop line it starts no run, and the Exchange ends as cancelled.
 4. It hands every event of the run to `events.jsonl` and, through the saving task, to the chat tables.
 5. When the run is over, it ends the Exchange with the run's outcome.
 
@@ -24,7 +25,7 @@ from .control import ControlFile
 from .database import Connect
 from .detach import detach
 from .driver import Driver, DriverRun, find_launcher, launcher_name
-from .end import End, end_of_run, failed, finish, write_end
+from .end import End, cancelled, end_of_run, failed, finish, write_end
 from .errors import Refusal
 from .events import EventsFile
 from .request import run_request, write_request
@@ -107,6 +108,8 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
     request_file = write_request(folder.path, request)
     control = ControlFile(folder.path / "control")
     try:
+        if any(line.kind == "stop" for line in control.read()):  # read just before the run (RCT-2.7, TRV-0.1)
+            return cancelled()
         try:
             run = await DriverRun.start(launcher, request_file, prepared.handed.working_folder)
         except OSError as error:

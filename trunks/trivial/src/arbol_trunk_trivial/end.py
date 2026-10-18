@@ -48,6 +48,10 @@ def failed(code: str, message: str) -> End:
     return End("failed", datetime.now(UTC), {"code": code, "message": message})
 
 
+def cancelled() -> End:
+    return End("cancelled", datetime.now(UTC))
+
+
 def end_of_run(finished: dict[str, Any] | None) -> End:
     """The end that the run's `finished` event gives, or `driver_failed` without one."""
     if finished is None:

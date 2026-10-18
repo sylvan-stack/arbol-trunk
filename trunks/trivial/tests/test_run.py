@@ -53,6 +53,18 @@ PLAIN = [
      "unfinishedCalls": []},
 ]
 
+# A launcher that starts a shell call and waits for a line on its control input; on a stop line it finishes the call as
+# interrupted and the run as cancelled, as a Driver does (DRV-2), and keeps the line it got.
+STOPPABLE = """#!/bin/sh
+run=$(sed -n 's/.*"runId":"\\([^"]*\\)".*/\\1/p' "$4")
+printf '%s\\n' '{"runId":"'"$run"'","seq":1,"type":"started","continuity":"fresh","subscriptionId":"s","toolVersion":"t","driverBuild":"0"}'
+printf '%s\\n' '{"runId":"'"$run"'","seq":2,"type":"tool_started","callId":"call_1","name":"shell","input":{"command":"make"}}'
+IFS= read -r line
+printf '%s\\n' "$line" > "$STANDIN_LOG/control"
+printf '%s\\n' '{"runId":"'"$run"'","seq":3,"type":"tool_finished","callId":"call_1","ok":false,"error":"Stopped.","interrupted":true}'
+printf '%s\\n' '{"runId":"'"$run"'","seq":4,"type":"finished","outcome":"cancelled","producedOutput":false,"unfinishedCalls":[]}'
+"""
+
 
 class WholeExchange(unittest.TestCase):
     def setUp(self) -> None:
@@ -213,6 +225,33 @@ class WholeExchange(unittest.TestCase):
         self.assertFalse((self.log / "starts").exists())
         self.assertEqual(self.database.exchanges[FIRST].state, "cancelled")
         self.assertEqual(self.database.runs, {})
+        self.assertEqual(os.listdir(self.root / "exchanges"), [])
+
+    def test_a_stop_line_while_a_tool_call_runs_cancels_the_exchange_and_saves_the_call_as_interrupted(self) -> None:
+        (self.bin / "arbol-claude-driver").write_text(STOPPABLE)
+        folder = self.root / "exchanges" / FIRST
+        written: list[float] = []
+
+        async def stop_once_the_call_runs() -> None:
+            while b"tool_started" not in ((folder / "events.jsonl").read_bytes() if folder.exists() else b""):
+                await asyncio.sleep(0.005)
+            descriptor = os.open(folder / "control", os.O_WRONLY | os.O_APPEND)
+            try:
+                os.write(descriptor, b'{"type": "stop"}\n')
+            finally:
+                os.close(descriptor)
+            written.append(time.monotonic())
+
+        status, _lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi",
+                                        during=stop_once_the_call_runs)
+        ended = time.monotonic()
+        self.assertEqual(status, 2)
+        self.assertEqual((self.log / "control").read_text(), '{"type": "stop"}\n')
+        self.assertLess(ended - written[0], 1.8)  # the 18 seconds of RCT-2.7, divided by the time scale of 10
+        self.assertEqual(self.database.exchanges[FIRST].state, "cancelled")
+        call = self.database.tool_calls[(FIRST, 2)]
+        self.assertEqual((call["name"], call["ok"], call["interrupted"]), ("shell", False, True))
+        self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["outcome"], "cancelled")
         self.assertEqual(os.listdir(self.root / "exchanges"), [])
 
     def test_a_whole_start_reads_no_settings_file_but_its_own(self) -> None:

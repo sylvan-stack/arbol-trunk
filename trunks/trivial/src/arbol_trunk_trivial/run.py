@@ -35,7 +35,7 @@ from .start import Prepared
 
 ROUND_SECONDS = 1.0
 OUTPUT_AFTER_EXIT_SECONDS = 1.0
-STOP_SECONDS = 16.0  # from the stop line to SIGKILL, one second more than a Driver has for a stop (TRV-D8)
+STOP_SECONDS = 16.0  # from the stop line, or the run's finished, to SIGKILL; a Driver has 15 for a stop (TRV-D8)
 
 
 class Output:
@@ -138,29 +138,35 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
     been read to the end, for at most one second after the process ended (TRV-0, "Stopping the run"). Each round waits
     at most one second for output, appends what arrived, and hands each new `stop` and `answer` line of `control`
     unchanged to the run's control input, without waiting for the Driver to take it (RCT-1.7). A Driver still alive
-    16 seconds after the first stop line it was handed is ended with SIGKILL; each round checks that time and waits
-    past it for nothing (TRV-D8)."""
+    16 seconds after the first stop line it was handed, or after its `finished` when that came first, is ended with
+    SIGKILL; each round checks that time and waits past it for nothing (TRV-D8)."""
     finished: dict[str, Any] | None = None
     exited_at: float | None = None
     stopped_at: float | None = None
+    finished_at: float | None = None
     killed = False
+
+    def kill_time() -> float | None:
+        first = min((at for at in (stopped_at, finished_at) if at is not None), default=None)
+        return None if killed or first is None else first + scaled(STOP_SECONDS)
+
     while True:
         wait = scaled(ROUND_SECONDS)
         if exited_at is not None:
             wait = min(wait, max(exited_at + scaled(OUTPUT_AFTER_EXIT_SECONDS) - clock.now(), 0.0))
-        kill_at = None if killed or stopped_at is None else stopped_at + scaled(STOP_SECONDS)
+        kill_at = kill_time()
         if kill_at is not None and run.returncode is None:
             wait = min(wait, max(kill_at - clock.now(), 0.0))
         for line in await run.read(wait):
             n = events.append_event(line)
             saver.add(maker.take(n, line.event))
             if line.event.get("type") == "finished" and finished is None:
-                finished = line.event
+                finished, finished_at = line.event, clock.now()
         for handed in control.read() if control is not None else []:
             run.write_control(handed.text)
             if handed.kind == "stop" and stopped_at is None:
                 stopped_at = clock.now()
-        kill_at = None if killed or stopped_at is None else stopped_at + scaled(STOP_SECONDS)
+        kill_at = kill_time()
         if kill_at is not None and run.returncode is None and clock.now() >= kill_at:
             run.kill()
             killed = True

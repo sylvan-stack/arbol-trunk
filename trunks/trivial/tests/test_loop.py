@@ -134,6 +134,26 @@ class StoppingTheRun(LoopTest):
         self.assertEqual([line for _at, line in self.driver.control], [STOP, STOP])
         self.assertEqual(self.driver.killed_at, 1.65)
 
+    def test_a_driver_still_alive_16_seconds_after_its_finished_is_killed_and_the_run_keeps_its_outcome(self) -> None:
+        self.driver.at(0.3, "event", event(1, "started"))
+        self.driver.at(2.0, "event", finished(2, "completed"))
+        over = self.drive()
+        self.assertEqual(self.driver.killed_at, 18.0)
+        self.assertEqual(self.driver.control, [])
+        self.assertEqual(end_of_run(over.finished, stopped=over.stopped).state, "completed")
+
+    def test_the_16_seconds_count_from_whichever_came_first(self) -> None:
+        self.driver.at(2.0, "event", finished(1, "completed"))
+        self.driver.at(10.0, "control", STOP)
+        self.drive()
+        self.assertEqual(self.driver.killed_at, 18.0)
+        self.clock = MovedClock()
+        self.driver = ScriptedDriver(self.clock, control_file=self.folder / "control")
+        self.driver.at(1.0, "control", STOP)
+        self.driver.at(5.0, "event", finished(1, "cancelled"))
+        self.drive()
+        self.assertEqual(self.driver.killed_at, 17.0)
+
     def test_a_run_that_completed_before_the_stop_reached_it_keeps_its_outcome(self) -> None:
         self.driver.at(0.5, "control", STOP)
         self.driver.at(0.7, "event", finished(1, "completed"))

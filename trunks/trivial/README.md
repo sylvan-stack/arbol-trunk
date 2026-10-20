@@ -1,6 +1,8 @@
 # The Trivial Trunk
 
-The default Trunk of every Arbol Root: for each Chat Exchange it makes exactly one run of a Driver with the route it is handed, and nothing else. Its specification is [TRV-0](https://github.com/sylvan-stack/arbol-trunk-artifacts/blob/main/trunks/trivial/specs/00-the-trivial-trunk.md); it implements version 1 of the [Root Contract](https://github.com/sylvan-stack/arbol-root-artifacts/blob/main/contract/README.md).
+The default Trunk of every Arbol Root: for each Chat Exchange it makes exactly one inference run of a Driver with the route it is handed. Its specification is [TRV-0](https://github.com/sylvan-stack/arbol-trunk-artifacts/blob/main/trunks/trivial/specs/00-the-trivial-trunk.md); it implements version 1 of the [Root Contract](https://github.com/sylvan-stack/arbol-root-artifacts/blob/main/contract/README.md).
+
+Before inference it checks `info`, offered families and Subscriptions, accepting Driver Contracts 1 and 2. Unknown or retired selections fail without fallback; model and effort choices pass unchanged to the Driver. Each metadata query is bounded and cancellable. An unfinished `~/.arbol/pi-cutover.json` migration blocks its affected routes until verified completion or explicit restore. Caller history remains the source for a first Pi run.
 
 Typed Python 3.14 with the standard library and psycopg 3 only. From this folder:
 

@@ -14,7 +14,7 @@ from unittest import mock
 
 from audit import opened_files
 from fakes import FakeDatabase
-from stand_ins import security_stand_in
+from stand_ins import security_stand_in, with_capabilities
 
 from arbol_trunk_trivial.command import handed, parse
 from arbol_trunk_trivial.root import roots_folder
@@ -79,7 +79,7 @@ class WholeExchange(unittest.TestCase):
         self.security = str(security_stand_in(self.home, status=44))
         self.bin = self.home / "bin"
         self.bin.mkdir()
-        (self.bin / "arbol-claude-driver").write_text(LAUNCHER)
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(LAUNCHER))
         os.chmod(self.bin / "arbol-claude-driver", 0o755)
         self.log = self.home / "log"
         self.log.mkdir()
@@ -90,6 +90,22 @@ class WholeExchange(unittest.TestCase):
 
     def events(self, events: list[dict[str, Any]]) -> None:
         (self.log / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+
+    def test_retired_subscription_never_starts_inference(self) -> None:
+        status, _ = self.run_trunk("--exchange", FIRST, "--chat", CHAT, "--driver", "claude",
+                                   "--subscription", "zai", "hello")
+        self.assertEqual(status, 1)
+        self.assertFalse((self.log / "starts").exists())
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "driver_failed")
+        self.assertEqual(self.database.runs, {})
+
+    def test_pending_migration_never_starts_inference(self) -> None:
+        (self.home / ".arbol/pi-cutover.json").write_text(json.dumps({
+            "phase": "publishing", "blockedRoutes": [{"driver": "claude", "subscription": "anthropic"}]}))
+        status, _ = self.run_trunk("--exchange", FIRST, "--chat", CHAT, "--driver", "claude",
+                                   "--subscription", "anthropic", "hello")
+        self.assertEqual(status, 1)
+        self.assertFalse((self.log / "starts").exists())
 
     def run_trunk(self, *args: str, small: dict[str, str] | None = None,
                   during: Callable[[], Awaitable[None]] | None = None) -> tuple[int, list[str]]:
@@ -228,7 +244,7 @@ class WholeExchange(unittest.TestCase):
         self.assertEqual(os.listdir(self.root / "exchanges"), [])
 
     def test_a_stop_line_while_a_tool_call_runs_cancels_the_exchange_and_saves_the_call_as_interrupted(self) -> None:
-        (self.bin / "arbol-claude-driver").write_text(STOPPABLE)
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(STOPPABLE))
         folder = self.root / "exchanges" / FIRST
         written: list[float] = []
 
@@ -262,7 +278,7 @@ class WholeExchange(unittest.TestCase):
             self.run_trunk("--exchange", FIRST, "hi")
         outside = sorted({os.path.relpath(file, self.home) for file in files if file.startswith(str(self.home))
                           and f"/exchanges/{FIRST}" not in file and "/exchanges/." not in file})
-        self.assertEqual(outside, [".arbol/arbol-trunk/trivial.json", ".arbol/database.json",
+        self.assertEqual(outside, [".arbol/arbol-trunk/trivial.json", ".arbol/database.json", ".arbol/pi-cutover.json",
                                    "Library/Application Support/Arbol/roots/rct/root.json", "start.json"])
 
 

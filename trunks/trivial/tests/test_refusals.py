@@ -15,7 +15,7 @@ from unittest import mock
 
 import fakes
 from fakes import FakeDatabase
-from stand_ins import security_stand_in
+from stand_ins import security_stand_in, with_capabilities
 
 from arbol_trunk_trivial.cli import start
 from arbol_trunk_trivial.database import Acceptance, Accepted, Connect, Connection
@@ -51,7 +51,7 @@ class StartTest(unittest.TestCase):
         self.security = security_stand_in(self.home, status=44)
         self.bin = self.home / "bin"
         self.bin.mkdir()
-        (self.bin / "arbol-claude-driver").write_text(LAUNCHER)
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(LAUNCHER))
         os.chmod(self.bin / "arbol-claude-driver", 0o755)
         self.work = self.home / "work"
         self.work.mkdir()

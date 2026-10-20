@@ -13,14 +13,118 @@ import asyncio
 import contextlib
 import json
 import os
+import signal
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 READ_SIZE = 65536
 EXIT_POLL_SECONDS = 0.01
+CAPABILITY_SECONDS = 5.0
+CAPABILITY_BYTES = 256 * 1024
+
+
+class CapabilityError(Exception):
+    """The selected route cannot safely start inference."""
+
+
+class CapabilityStopped(Exception):
+    """The caller stopped while capability queries were running."""
+
+
+def migration_ready(home: Path, driver: str, subscription: str | None) -> None:
+    path = home / ".arbol/pi-cutover.json"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise CapabilityError(
+            "The Pi migration marker cannot be read; finish or explicitly restore the migration.") from None
+    try:
+        if len(raw) > CAPABILITY_BYTES:
+            raise ValueError
+        marker = json.loads(raw)
+        if not isinstance(marker, dict) or marker.get("phase") not in {
+            "preparing", "quiesced", "publishing", "verifying", "complete", "restoring", "restored"
+        } or not isinstance(marker.get("blockedRoutes"), list):
+            raise ValueError
+        for route in marker["blockedRoutes"]:
+            if (not isinstance(route, dict) or not isinstance(route.get("driver"), str)
+                    or not (route.get("subscription") is None or isinstance(route["subscription"], str))):
+                raise ValueError
+        if marker["phase"] in {"complete", "restored"}:
+            return
+        if any(route["driver"] == driver and
+               (route.get("subscription") is None or subscription is None or route["subscription"] == subscription)
+               for route in marker["blockedRoutes"]):
+            raise CapabilityError("This route is paused by the Pi migration; finish or explicitly restore it.")
+    except (ValueError, TypeError):
+        raise CapabilityError("The Pi migration marker is invalid; repair or explicitly restore it.") from None
+
+
+async def capability_query(launcher: str, arguments: list[str], cwd: str, stopped: Callable[[], bool]) -> Any:
+    if stopped():
+        raise CapabilityStopped
+    process = await asyncio.create_subprocess_exec(
+        launcher, *arguments, cwd=cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+
+    async def collect() -> bytes:
+        assert process.stdout is not None
+        data = bytearray()
+        while chunk := await process.stdout.read(READ_SIZE):
+            data.extend(chunk)
+            if len(data) > CAPABILITY_BYTES:
+                raise CapabilityError("Driver capability output exceeds its bound.")
+        if await process.wait() != 0:
+            raise CapabilityError("Driver capability query failed; check its settings and selected Subscription.")
+        return bytes(data)
+
+    task = asyncio.create_task(collect())
+    deadline = time.monotonic() + CAPABILITY_SECONDS
+    try:
+        while not task.done():
+            if stopped():
+                raise CapabilityStopped
+            if time.monotonic() >= deadline:
+                raise CapabilityError("Driver capability query timed out.")
+            await asyncio.wait({task}, timeout=0.02)
+        try:
+            return json.loads(task.result())
+        except (ValueError, UnicodeError):
+            raise CapabilityError("Driver capability query returned invalid JSON.") from None
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await process.wait()
+
+
+async def capabilities(launcher: str, driver: str, subscription: str | None, cwd: str, home: Path,
+                       stopped: Callable[[], bool]) -> None:
+    migration_ready(home, driver, subscription)
+    info = await capability_query(launcher, ["info"], cwd, stopped)
+    if (not isinstance(info, dict) or info.get("driver") != driver
+            or type(info.get("contract")) is not int or info["contract"] not in (1, 2)):
+        raise CapabilityError("The launcher does not offer the selected Driver and a supported contract (1 or 2).")
+    families = await capability_query(launcher, ["subscriptions", "families"], cwd, stopped)
+    records = await capability_query(launcher, ["subscriptions", "list"], cwd, stopped)
+    if (not isinstance(families, list) or not families or not isinstance(records, list) or not records
+            or any(not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in families)
+            or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                   or not isinstance(item.get("family"), str) for item in records)):
+        raise CapabilityError("The Driver returned invalid family or Subscription capabilities.")
+    offered = {item["id"] for item in families}
+    selected = [item for item in records if subscription is None or item["id"] == subscription]
+    if not selected or any(item["family"] not in offered for item in selected):
+        raise CapabilityError("The selected Subscription is unavailable; migrate retired Claude z.ai routes to Pi.")
+    migration_ready(home, driver, subscription)
+    if stopped():
+        raise CapabilityStopped
 
 
 def launcher_name(driver: str) -> str:

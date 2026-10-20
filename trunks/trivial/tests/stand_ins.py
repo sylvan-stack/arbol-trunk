@@ -5,6 +5,18 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+CAPABILITIES = """
+case "$*" in
+  info) printf '%s\\n' '{"driver":"claude","contract":2}'; exit 0 ;;
+  "subscriptions families") printf '%s\\n' '[{"id":"anthropic"}]'; exit 0 ;;
+  "subscriptions list") printf '%s\\n' '[{"id":"anthropic","family":"anthropic"}]'; exit 0 ;;
+esac
+"""
+
+
+def with_capabilities(script: str) -> str:
+    return script.replace("#!/bin/sh\n", "#!/bin/sh\n" + CAPABILITIES, 1)
+
 
 def security_stand_in(folder: Path, *, status: int = 0, password: str = "secret", sleep: float = 0) -> Path:
     """A `security` that records its arguments, waits `sleep` seconds and ends with `status`, printing `password`."""

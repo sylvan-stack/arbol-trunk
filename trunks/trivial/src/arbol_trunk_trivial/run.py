@@ -24,7 +24,7 @@ from .clock import UPTIME, Clock, scaled
 from .control import ControlFile
 from .database import Connect
 from .detach import detach
-from .driver import Driver, DriverRun, find_launcher, launcher_name
+from .driver import CapabilityError, CapabilityStopped, Driver, DriverRun, capabilities, find_launcher, launcher_name
 from .end import End, cancelled, end_of_run, failed, finish, write_end
 from .errors import Refusal
 from .events import EventsFile
@@ -112,7 +112,14 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         if any(line.kind == "stop" for line in control.read()):  # read just before the run (RCT-2.7, TRV-0.1)
             return cancelled()
         try:
+            await capabilities(launcher, prepared.driver, prepared.handed.route.get("subscription"),
+                               prepared.handed.working_folder, prepared.root.folder.parents[4],
+                               lambda: any(line.kind == "stop" for line in control.read()))
             run = await DriverRun.start(launcher, request_file, prepared.handed.working_folder)
+        except CapabilityStopped:
+            return cancelled()
+        except CapabilityError as error:
+            return failed("driver_failed", str(error))
         except OSError as error:
             return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
         over = await drive(run, events, maker, saver, control)

@@ -35,6 +35,7 @@ class Command:
     options: dict[str, str] = field(default_factory=dict)
     detach: bool = False
     message: str | None = None
+    operation: str = "run"
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,10 @@ def parse(args: list[str]) -> Command:
     rest = args[2:]
     if not rest:
         raise invalid("No command was given: run.")
+    if rest[0] == "settle":
+        if len(rest) != 2 or not UUID.fullmatch(rest[1]):
+            raise invalid("settle takes exactly one Exchange UUID, written in lower case with hyphens.")
+        return Command(root, {"--exchange": rest[1]}, operation="settle")
     if rest[0] != "run":
         raise invalid(f"Unknown command: {rest[0]}.")
     options: dict[str, str] = {}
@@ -112,6 +117,8 @@ def read_request(file: str) -> dict[str, Any]:
 
 def handed(command: Command, started_in: str | None = None) -> Handed:
     """The options and the request file together: an option replaces only its own field of the file."""
+    if command.operation != "run":
+        raise invalid("Only run takes a message and a Driver request.")
     request: dict[str, Any] = read_request(command.options["--request"]) if "--request" in command.options else {}
     options = command.options
 

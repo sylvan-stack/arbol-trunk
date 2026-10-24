@@ -58,12 +58,20 @@ class Accepted:
     history: list[HistoryRow]  # the rows of the chat's earlier Exchanges, read in the same transaction
 
 
+@dataclass(frozen=True)
+class StoredExchange:
+    state: str
+    accepted_at: datetime
+
+
 class Connection(Protocol):
     """The calls the Trunk makes on its Root's database."""
 
     async def accept(self, acceptance: Acceptance) -> Accepted: ...
 
     async def save(self, row: Row) -> None: ...
+
+    async def exchange_state(self, exchange: str) -> StoredExchange | None: ...
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
                   error: dict[str, Any] | None) -> None: ...
@@ -145,6 +153,12 @@ class PostgresConnection:
         """One row, with an insert that does nothing when it is there, in a transaction of its own."""
         sql, params = row.statement()
         await within_limit(self.connection.execute(sql, params))
+
+    async def exchange_state(self, exchange: str) -> StoredExchange | None:
+        async with self.connection.cursor() as cursor:
+            await within_limit(cursor.execute("SELECT state, accepted_at FROM exchanges WHERE id = %s", (exchange,)))
+            found = await cursor.fetchone()
+        return StoredExchange(str(found[0]), found[1]) if found is not None else None
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
                   error: dict[str, Any] | None) -> None:

@@ -15,6 +15,8 @@ from arbol_trunk_trivial.database import (
     Connect,
     Connection,
     DatabaseUnavailable,
+    DuplicateExchange,
+    PriorExchange,
     StoredExchange,
 )
 from arbol_trunk_trivial.history import HistoryRow
@@ -81,6 +83,11 @@ class FakeConnection:
         found = self.database.exchanges.get(exchange)
         return StoredExchange(found.state, found.accepted_at) if found is not None else None
 
+    async def find_exchange(self, exchange: str) -> PriorExchange | None:
+        await self._call()
+        found = self.database.exchanges.get(exchange)
+        return PriorExchange(found.id, found.chat, found.number, found.trunk, found.build) if found is not None else None
+
     async def _call(self) -> None:
         if self.database.delay:
             await asyncio.sleep(self.database.delay)
@@ -88,6 +95,10 @@ class FakeConnection:
     async def accept(self, acceptance: Acceptance) -> Accepted:
         await self._call()
         db, a = self.database, acceptance
+        if a.exchange in db.exchanges:
+            prior = await self.find_exchange(a.exchange)
+            assert prior is not None
+            raise DuplicateExchange(prior)
         numbers = [e.number for e in db.exchanges.values() if e.chat == a.chat]
         if any(e.chat == a.chat and e.state == "open" for e in db.exchanges.values()):
             raise ChatBusy(next(e.id for e in db.exchanges.values() if e.chat == a.chat and e.state == "open"))

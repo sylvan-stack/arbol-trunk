@@ -17,13 +17,46 @@ from typing import Any
 
 from . import CODE_NAME
 from .clock import iso
-from .database import Acceptance, Accepted, ChatBusy, Connect, Connection, DatabaseUnavailable
+from .database import (
+    Acceptance,
+    Accepted,
+    ChatBusy,
+    Connect,
+    Connection,
+    DatabaseUnavailable,
+    DuplicateExchange,
+    PriorExchange,
+)
 from .errors import Refusal, invalid
 from .folder import ExchangeFolder
 from .history import make_history
 from .start import Prepared
 
 ACCEPTANCE_SECONDS = 10.0  # from the start; not divided by ARBOL_TEST_TIME_SCALE (RCT-4)
+
+
+class Repeated(Exception):
+    """An already-accepted identifier: return its acceptance and start no work."""
+
+    def __init__(self, root: str, prior: PriorExchange) -> None:
+        self.line = acceptance_line(root=root, exchange=prior.exchange, chat=prior.chat, number=prior.number,
+                                    build=prior.build, trunk=prior.trunk, duplicate=True)
+
+
+async def find_prior(connect: Connect, exchange: str, deadline: float) -> PriorExchange | None:
+    connection: Connection | None = None
+
+    async def work() -> PriorExchange | None:
+        nonlocal connection
+        connection = await connect()
+        return await connection.find_exchange(exchange)
+
+    try:
+        return await asyncio.wait_for(work(), max(deadline - time.monotonic(), 0))
+    except (DatabaseUnavailable, TimeoutError):
+        raise Refusal("database_unavailable", "The database did not finish the identifier lookup within 10 seconds.") from None
+    finally:
+        await _close(connection)
 
 
 async def accept_in_database(connect: Connect, acceptance: Acceptance,
@@ -43,6 +76,9 @@ async def accept_in_database(connect: Connect, acceptance: Acceptance,
         await _close(connection)
         open_one = f": {busy.open_exchange}" if busy.open_exchange else ""
         raise Refusal("chat_busy", f"The chat has an Exchange in progress{open_one}.") from None
+    except DuplicateExchange:
+        await _close(connection)
+        raise
     except TimeoutError:
         await _close(connection)
         raise Refusal("database_unavailable", f"The database did not accept the message within "
@@ -57,10 +93,11 @@ async def _close(connection: Connection | None) -> None:
         await connection.close()
 
 
-def acceptance_line(*, root: str, exchange: str, chat: str, number: int, build: str, duplicate: bool = False) -> str:
+def acceptance_line(*, root: str, exchange: str, chat: str, number: int, build: str, duplicate: bool = False,
+                     trunk: str = CODE_NAME) -> str:
     """The one line that says the message was accepted (RCT-2, Accepted)."""
     return json.dumps({"accepted": True, "duplicate": duplicate, "root": root, "exchange": exchange, "chat": chat,
-                       "number": number, "trunk": CODE_NAME, "build": build}, separators=(",", ":"))
+                       "number": number, "trunk": trunk, "build": build}, separators=(",", ":"))
 
 
 @dataclass
@@ -83,6 +120,10 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
     handed = prepared.handed
     if handed.replaces is not None or handed.message is None:  # a message without --replaces: handed() saw to it
         raise invalid("Sending a message again is not built yet.")
+    if handed.exchange is not None:
+        prior = await find_prior(connect, handed.exchange, started + ACCEPTANCE_SECONDS)
+        if prior is not None:
+            raise Repeated(prepared.root.identifier, prior)
     exchange = handed.exchange or str(uuid.uuid4())
     chat = handed.chat or str(uuid.uuid4())
     record: dict[str, Any] = {"rootContract": prepared.root.root_contract, "root": prepared.root.identifier,
@@ -98,6 +139,9 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
         connection, accepted = await accept_in_database(connect, Acceptance(
             exchange, chat, handed.message, CODE_NAME, build, handed.route, handed.small_call_route,
             handed.working_folder, accepted_at), started + ACCEPTANCE_SECONDS)
+    except DuplicateExchange as duplicate:
+        folder.discard()
+        raise Repeated(prepared.root.identifier, duplicate.prior) from None
     except BaseException:
         folder.discard()
         raise

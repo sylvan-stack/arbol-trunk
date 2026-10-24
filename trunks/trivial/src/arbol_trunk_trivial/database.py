@@ -64,6 +64,20 @@ class StoredExchange:
     accepted_at: datetime
 
 
+@dataclass(frozen=True)
+class PriorExchange:
+    exchange: str
+    chat: str
+    number: int
+    trunk: str
+    build: str
+
+
+class DuplicateExchange(Exception):
+    def __init__(self, prior: PriorExchange) -> None:
+        self.prior = prior
+
+
 class Connection(Protocol):
     """The calls the Trunk makes on its Root's database."""
 
@@ -72,6 +86,8 @@ class Connection(Protocol):
     async def save(self, row: Row) -> None: ...
 
     async def exchange_state(self, exchange: str) -> StoredExchange | None: ...
+
+    async def find_exchange(self, exchange: str) -> PriorExchange | None: ...
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
                   error: dict[str, Any] | None) -> None: ...
@@ -144,6 +160,10 @@ class PostgresConnection:
                 await within_limit(cursor.execute(HISTORY, {"chat": a.chat, "number": number}))
                 rows = await cursor.fetchall()
         except DatabaseUnavailable as error:
+            if isinstance(error.__cause__, sqlstate.UniqueViolation):
+                prior = await self.find_exchange(a.exchange)
+                if prior is not None:
+                    raise DuplicateExchange(prior) from None
             if isinstance(error.__cause__, sqlstate.UniqueViolation) and error.__cause__.diag.constraint_name in BUSY:
                 raise ChatBusy(await self.open_exchange(a.chat)) from None
             raise
@@ -159,6 +179,13 @@ class PostgresConnection:
             await within_limit(cursor.execute("SELECT state, accepted_at FROM exchanges WHERE id = %s", (exchange,)))
             found = await cursor.fetchone()
         return StoredExchange(str(found[0]), found[1]) if found is not None else None
+
+    async def find_exchange(self, exchange: str) -> PriorExchange | None:
+        async with self.connection.cursor() as cursor:
+            await within_limit(cursor.execute("SELECT id::text, chat_id::text, number, trunk, build"
+                                              " FROM exchanges WHERE id = %s", (exchange,)))
+            found = await cursor.fetchone()
+        return PriorExchange(str(found[0]), str(found[1]), int(found[2]), str(found[3]), str(found[4])) if found else None
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
                   error: dict[str, Any] | None) -> None:

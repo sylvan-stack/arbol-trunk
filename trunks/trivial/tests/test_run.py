@@ -151,8 +151,11 @@ class WholeExchange(unittest.TestCase):
         status, lines = self.run_trunk("--exchange", FIRST, "--chat", CHAT, "--driver", "claude", "--subscription",
                                        "anthropic", "--model", "sonnet", "What does build.sh do?")
         self.assertEqual(status, 0)
-        self.assertEqual(lines, ['{"accepted":true,"duplicate":false,"root":"rct","exchange":"' + FIRST + '",'
+        self.assertEqual(lines[:1], ['{"accepted":true,"duplicate":false,"root":"rct","exchange":"' + FIRST + '",'
                                  '"chat":"' + CHAT + '","number":1,"trunk":"trivial","build":"0"}'])
+        self.assertEqual([json.loads(line)["event"]["seq"] for line in lines[1:-1]],
+                         [event["seq"] for event in PLAIN])
+        self.assertEqual(json.loads(lines[-1])["end"]["state"], "completed")
         self.assertEqual((self.log / "starts").read_text().splitlines(),
                          [f"run --control --request {self.root}/exchanges/{FIRST}/run-1.json"])
         self.assertEqual(json.loads((self.log / "request-1.json").read_text()), {
@@ -184,6 +187,18 @@ class WholeExchange(unittest.TestCase):
             {"type": "message", "role": "assistant", "text": "It sets -e."},
         ])
         self.assertEqual(self.database.exchanges[SECOND].number, 2)
+
+    def test_foreground_exit_status_follows_the_exchange_end(self) -> None:
+        for outcome, expected in (("completed", 0), ("failed", 1), ("cancelled", 2)):
+            with self.subTest(outcome=outcome):
+                self.database = FakeDatabase()
+                end = {**PLAIN[-1], "outcome": outcome}
+                if outcome == "failed":
+                    end["error"] = {"code": "internal", "message": "The stand-in failed."}
+                self.events([*PLAIN[:-1], end])
+                status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hello")
+                self.assertEqual(status, expected)
+                self.assertEqual(json.loads(lines[-1])["end"]["state"], outcome)
 
     def test_with_a_small_call_route_no_small_call_is_made_and_the_route_stays_as_handed(self) -> None:
         small = {"driver": "claude", "subscription": "anthropic", "model": "haiku"}

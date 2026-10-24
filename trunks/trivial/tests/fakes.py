@@ -8,7 +8,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from arbol_trunk_trivial.database import Acceptance, Accepted, ChatBusy, Connect, Connection, DatabaseUnavailable
+from arbol_trunk_trivial.database import (
+    Acceptance,
+    Accepted,
+    ChatBusy,
+    Connect,
+    Connection,
+    DatabaseUnavailable,
+    StoredExchange,
+)
 from arbol_trunk_trivial.history import HistoryRow
 from arbol_trunk_trivial.rows import MessageRow, Row, RunRow, ToolCallRow
 
@@ -67,6 +75,11 @@ class FakeConnection:
 
     async def close(self) -> None:
         self.database.closed += 1
+
+    async def exchange_state(self, exchange: str) -> StoredExchange | None:
+        await self._call()
+        found = self.database.exchanges.get(exchange)
+        return StoredExchange(found.state, found.accepted_at) if found is not None else None
 
     async def _call(self) -> None:
         if self.database.delay:

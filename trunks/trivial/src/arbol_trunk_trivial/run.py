@@ -14,8 +14,6 @@ and its output has been read to the end, for at most one second after the proces
 
 from __future__ import annotations
 
-import sys
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +26,7 @@ from .driver import CapabilityError, CapabilityStopped, Driver, DriverRun, capab
 from .end import End, cancelled, end_of_run, failed, finish, write_end
 from .errors import Refusal
 from .events import EventsFile
+from .output import Output as Output
 from .request import run_request, write_request
 from .rows import RowMaker
 from .saver import Saver
@@ -36,28 +35,6 @@ from .start import Prepared
 ROUND_SECONDS = 1.0
 OUTPUT_AFTER_EXIT_SECONDS = 1.0
 STOP_SECONDS = 16.0  # from the stop line, or the run's finished, to SIGKILL; a Driver has 15 for a stop (TRV-D8)
-
-
-class Output:
-    """Standard output, which never holds up, changes or ends the Exchange (RCT-2.19): a write that fails ends
-    nothing, and nothing more is written there after it."""
-
-    def __init__(self, write: Callable[[str], None] | None = None) -> None:
-        self._write = write or _stdout
-        self.broken = False
-
-    def line(self, text: str) -> None:
-        if self.broken:
-            return
-        try:
-            self._write(text)
-        except (OSError, ValueError):
-            self.broken = True
-
-
-def _stdout(text: str) -> None:
-    sys.stdout.write(text + "\n")
-    sys.stdout.flush()
 
 
 async def run_exchange(prepared: Prepared, connect: Connect, *, build: str, process: dict[str, Any],
@@ -74,13 +51,14 @@ async def run_exchange(prepared: Prepared, connect: Connect, *, build: str, proc
     if prepared.handed.detach:
         detach()
         output.broken = True
-    end = await run_accepted(prepared, connect, exchange, search_path)
+    end = await run_accepted(prepared, connect, exchange, search_path, output)
     return end.exit_status
 
 
-async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange, search_path: str | None) -> End:
+async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange, search_path: str | None,
+                       output: Output | None = None) -> End:
     folder = exchange.folder
-    events = EventsFile(folder.path / "events.jsonl")
+    events = EventsFile(folder.path / "events.jsonl", output)
     maker = RowMaker(folder.exchange)
     saver = Saver(connect, exchange.connection)
     saver.start()

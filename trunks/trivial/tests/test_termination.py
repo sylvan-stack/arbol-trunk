@@ -130,3 +130,32 @@ end_group()
                     process.wait()
             self.assertEqual(process.returncode, -signal.SIGKILL, err.decode())
             self.assertTrue(json.loads(report.read_text())["ended"])
+
+    def test_a_watch_thread_can_end_the_group_without_main_thread_signal_api_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "events.jsonl"
+            script = f"""
+import sys,threading,time
+from pathlib import Path
+sys.path.insert(0,{str(SOURCE)!r})
+from arbol_trunk_trivial.termination import end_group,install_handlers
+install_handlers()
+Path({str(path)!r}).write_text('accepted\\n')
+threading.Thread(target=end_group).start()
+try:
+    time.sleep(60)
+finally:
+    with Path({str(path)!r}).open('a') as stream: stream.write('end\\n')
+"""
+            process = subprocess.Popen([sys.executable, "-I", "-c", script], stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, start_new_session=True,
+                                       env={**os.environ, "ARBOL_TEST_TIME_SCALE": "10"})
+            try:
+                _out, err = process.communicate(timeout=10)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+            self.assertEqual(process.returncode, -signal.SIGKILL, err.decode())
+            self.assertEqual(err, b"")
+            self.assertEqual(path.read_text(), "accepted\n")

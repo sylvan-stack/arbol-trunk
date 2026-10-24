@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import threading
 import time
 from types import FrameType
 from typing import NoReturn
@@ -29,8 +30,9 @@ def end_group() -> NoReturn:
     The Trunk stays alive until SIGKILL, with its loop stopped and further termination signals ignored. Its watch
     uses this same function; neither path gets back to the code that writes the Exchange's end.
     """
-    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(number, signal.SIG_IGN)
+    if threading.current_thread() is threading.main_thread():
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(number, signal.SIG_IGN)
     group = os.getpgrp()
     os.killpg(group, signal.SIGTERM)
     deadline = uptime() + scaled(GRACE_SECONDS)

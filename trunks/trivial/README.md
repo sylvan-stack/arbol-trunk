@@ -19,3 +19,5 @@ Until its first Build, it runs from this checkout through `bin/arbol-trunk-trivi
 python3.14 ~/repos/sylvan-stack/arbol-root/contract/conformance/bin/rct-conformance.py \
   --trunk ~/repos/sylvan-stack/arbol-trunk/trunks/trivial/bin/arbol-trunk-trivial --root-contract 1 --only R1
 ```
+
+Without `--detach`, `run` prints the acceptance and then the saved event lines, and returns 0 for completed, 1 for failed and 2 for cancelled. An unread or closed output pipe does not stop the Exchange. SIGTERM, Ctrl-C and a foreground terminal hang-up end its process group without recording an Exchange end; `bin/arbol-trunk-trivial --root <root> settle <exchange>` then recovers its saved text, tool calls and usage as interrupted. A recorded end keeps its state. The `R2` and `R10` conformance scenarios check these paths.

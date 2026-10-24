@@ -1,9 +1,11 @@
 import json
 import os
+import signal
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from arbol_trunk_trivial.driver import as_event
 from arbol_trunk_trivial.events import EventsFile
@@ -21,6 +23,7 @@ class ForegroundOutput(unittest.TestCase):
             output.line("x" * 1000)
         self.assertLess(time.monotonic() - began, 0.5)
         self.assertTrue(output.broken)
+        self.assertTrue(os.get_blocking(writer))
 
     def test_a_closed_pipe_stops_output_and_does_not_stop_the_events_file(self) -> None:
         reader, writer = os.pipe()
@@ -39,6 +42,7 @@ class ForegroundOutput(unittest.TestCase):
             finally:
                 events.close()
             self.assertTrue(output.broken)
+            self.assertTrue(os.get_blocking(writer))
             self.assertEqual(len(path.read_text().splitlines()), 2)
             self.assertEqual(json.loads(path.read_text().splitlines()[-1])["end"]["state"], "completed")
 
@@ -62,3 +66,21 @@ class ForegroundOutput(unittest.TestCase):
             finally:
                 events.close()
             self.assertEqual(copied, path.read_text().splitlines())
+
+    def test_a_termination_signal_is_delivered_only_after_shared_descriptor_flags_are_restored(self) -> None:
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        self.addCleanup(os.close, writer)
+        seen: list[bool] = []
+        old_handler = signal.signal(signal.SIGTERM, lambda *_args: seen.append(os.get_blocking(writer)))
+        self.addCleanup(signal.signal, signal.SIGTERM, old_handler)
+        write = os.write
+
+        def interrupted(descriptor: int, data: bytes) -> int:
+            os.kill(os.getpid(), signal.SIGTERM)
+            return write(descriptor, data)
+
+        with mock.patch("arbol_trunk_trivial.output.os.write", side_effect=interrupted):
+            Output(descriptor=writer).line("hello")
+        self.assertEqual(seen, [True])
+        self.assertEqual(os.read(reader, 6), b"hello\n")

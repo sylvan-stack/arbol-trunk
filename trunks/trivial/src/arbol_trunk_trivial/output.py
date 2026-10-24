@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import os
+import signal
 from collections.abc import Callable
 
 
@@ -24,7 +25,15 @@ class Output:
 
 
 def _line(descriptor: int, text: str) -> None:
-    os.set_blocking(descriptor, False)
-    data = (text + "\n").encode("utf-8", "surrogatepass")
-    if os.write(descriptor, data) != len(data):
-        raise OSError(errno.EIO, "Standard output did not take the whole line.")
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+    try:
+        blocking = os.get_blocking(descriptor)
+        os.set_blocking(descriptor, False)
+        try:
+            data = (text + "\n").encode("utf-8", "surrogatepass")
+            if os.write(descriptor, data) != len(data):
+                raise OSError(errno.EIO, "Standard output did not take the whole line.")
+        finally:
+            os.set_blocking(descriptor, blocking)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)

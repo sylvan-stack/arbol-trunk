@@ -188,6 +188,18 @@ class WholeExchange(unittest.TestCase):
         ])
         self.assertEqual(self.database.exchanges[SECOND].number, 2)
 
+    def test_foreground_exit_status_follows_the_exchange_end(self) -> None:
+        for outcome, expected in (("completed", 0), ("failed", 1), ("cancelled", 2)):
+            with self.subTest(outcome=outcome):
+                self.database = FakeDatabase()
+                end = {**PLAIN[-1], "outcome": outcome}
+                if outcome == "failed":
+                    end["error"] = {"code": "internal", "message": "The stand-in failed."}
+                self.events([*PLAIN[:-1], end])
+                status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hello")
+                self.assertEqual(status, expected)
+                self.assertEqual(json.loads(lines[-1])["end"]["state"], outcome)
+
     def test_with_a_small_call_route_no_small_call_is_made_and_the_route_stays_as_handed(self) -> None:
         small = {"driver": "claude", "subscription": "anthropic", "model": "haiku"}
         status, _lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi", small=small)

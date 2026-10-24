@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from .database import Connect, Connection, DatabaseUnavailable, StoredExchange, conninfo, postgres
+from .end import End
 from .errors import Refusal
 from .folder import ExchangeFolder
+from .output import Output
 from .process import started_at
 from .root import SECURITY, database_address, find_root, keychain_password, read_json, role
 from .rows import Row, RowMaker, RunRow, moment
@@ -34,6 +36,8 @@ def process_alive(process: Any) -> bool:
         actual = datetime.fromisoformat(started_at(process["pid"]))
     except subprocess.CalledProcessError:
         return False
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        raise Refusal("trunk_failed", "The recorded process could not be checked safely.") from None
     return abs((actual - recorded).total_seconds()) <= 2
 
 
@@ -127,3 +131,44 @@ async def open_settlement(home: Path, root_id: str, exchange: str, *, security: 
         if connection is not None:
             await connection.close()
         raise Refusal("database_unavailable", "The database did not answer within 10 seconds.") from None
+
+
+def final_end(record: dict[str, Any], found: Replay) -> End:
+    value = record.get("end") or found.end
+    if value is None:
+        return End("interrupted", found.last_at)
+    if not isinstance(value, dict) or value.get("state") not in ("completed", "failed", "cancelled"):
+        raise Refusal("trunk_failed", "The Exchange record holds no readable end.")
+    try:
+        at = datetime.fromisoformat(value["at"])
+        if at.tzinfo is None:
+            raise ValueError("An end needs an absolute time.")
+    except (KeyError, TypeError, ValueError):
+        raise Refusal("trunk_failed", "The Exchange end holds no readable time.") from None
+    error = value.get("error") if value["state"] == "failed" else None
+    if value["state"] == "failed" and not isinstance(error, dict):
+        raise Refusal("trunk_failed", "The failed Exchange end holds no error.")
+    return End(value["state"], at, error)
+
+
+async def settle_exchange(home: Path, root_id: str, exchange: str, *, output: Output,
+                          security: str = SECURITY, connect: Connect | None = None) -> int:
+    pending = await open_settlement(home, root_id, exchange, security=security, connect=connect)
+    state = "none"
+    if pending is not None:
+        try:
+            found = replay(pending.folder.path / "events.jsonl", exchange, pending.stored.accepted_at)
+            end = final_end(pending.folder.record, found)
+            async with asyncio.timeout(DATABASE_SECONDS):
+                await pending.connection.end(exchange, found.rows, end.state, end.at, end.error)
+                stored = await pending.connection.exchange_state(exchange)
+            state = stored.state if stored is not None else "none"
+            pending.folder.remove()
+        except (DatabaseUnavailable, TimeoutError):
+            raise Refusal("database_unavailable", "The database did not take the saved Exchange within 10 seconds.") from None
+        except (OSError, ValueError):
+            raise Refusal("trunk_failed", "The Exchange folder could not be read or removed.") from None
+        finally:
+            await pending.connection.close()
+    output.line(json.dumps({"exchange": exchange, "settled": state}, separators=(",", ":")))
+    return 0

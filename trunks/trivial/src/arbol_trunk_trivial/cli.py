@@ -24,6 +24,7 @@ from .errors import Refusal
 from .process import started_at
 from .root import SECURITY
 from .run import Output, run_exchange
+from .settle import settle_exchange
 from .start import Prepared, prepare
 from .termination import install_handlers
 
@@ -37,13 +38,17 @@ def postgres_for(prepared: Prepared) -> Connect:
 
 async def start(args: list[str], *, home: Path, started: float, connector: Connector = postgres_for,
                 security: str = SECURITY, started_in: str | None = None, output: Output | None = None,
-                search_path: str | None = None) -> int:
+                search_path: str | None = None, settle_connect: Connect | None = None) -> int:
     """`run` from its command line to its end: one answer on standard output, the acceptance line or a refusal, then
     the Exchange. `started` is the start of the Trunk (time.monotonic()); a refusal is the exit status 1 (RCT-2)."""
     output = output or Output()
     try:
         build = build_number()
-        prepared = prepare(handed(parse(args), started_in), home, security)
+        command = parse(args)
+        if command.operation == "settle":
+            return await settle_exchange(home, command.root, command.options["--exchange"], output=output,
+                                         security=security, connect=settle_connect)
+        prepared = prepare(handed(command, started_in), home, security)
     except BuildRecordError as error:
         output.line(Refusal("trunk_failed", str(error)).line())
         return 1

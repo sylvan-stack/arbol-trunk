@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import tempfile
+import time
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,9 +10,11 @@ from unittest import mock
 
 from fakes import Exchange, FakeDatabase
 
+from arbol_trunk_trivial.cli import start
 from arbol_trunk_trivial.command import parse
 from arbol_trunk_trivial.errors import Refusal
 from arbol_trunk_trivial.folder import ExchangeFolder
+from arbol_trunk_trivial.output import Output
 from arbol_trunk_trivial.process import started_at
 from arbol_trunk_trivial.root import roots_folder
 from arbol_trunk_trivial.rows import MessageRow, RunRow, ToolCallRow
@@ -141,5 +144,64 @@ class ReplayingSettlement(SettlementTest):
                           ("small", "small", "failed", {"inputTokens": 3})])
         self.assertEqual(runs[1].error, small["error"])
         self.assertEqual(found.end, end)
-        self.assertTrue(self.folder.path.exists())
 
+
+class SavingSettlement(SettlementTest):
+    def settle(self) -> tuple[int, dict[str, object]]:
+        lines: list[str] = []
+        status = asyncio.run(start(["--root", "rct", "settle", X], home=self.home, started=time.monotonic(),
+                                   output=Output(lines.append), settle_connect=self.database.connect()))
+        self.assertEqual(len(lines), 1)
+        return status, json.loads(lines[0])
+
+    def test_the_command_saves_missing_rows_and_the_interrupted_end_then_removes_the_folder(self) -> None:
+        lines = [
+            {"n": 1, "event": {"runId": "run", "type": "started", "at": AT.isoformat()}},
+            {"n": 2, "event": {"runId": "run", "type": "text", "text": "first"}},
+            {"n": 3, "event": {"runId": "run", "type": "text", "text": "second"}},
+            {"n": 4, "event": {"runId": "run", "type": "tool_started", "callId": "call", "name": "shell",
+                                "input": {"command": "make"}, "at": "2026-10-15T09:31:00Z"}},
+        ]
+        (self.folder.path / "events.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+        self.database.messages[(X, 2)] = ("assistant", "already saved")
+        self.assertEqual(self.settle(), (0, {"exchange": X, "settled": "interrupted"}))
+        self.assertEqual(self.database.messages[(X, 2)], ("assistant", "already saved"))
+        self.assertEqual(self.database.messages[(X, 3)], ("assistant", "second"))
+        self.assertTrue(self.database.tool_calls[(X, 4)]["interrupted"])
+        self.assertEqual(self.database.runs[(X, "run")]["outcome"], "interrupted")
+        self.assertEqual(self.database.exchanges[X].ended_at, datetime(2026, 10, 15, 9, 31, tzinfo=UTC))
+        self.assertFalse(self.folder.path.exists())
+        self.assertEqual(self.database.closed, 1)
+        self.assertEqual(self.settle(), (0, {"exchange": X, "settled": "none"}))
+
+    def test_a_recorded_end_stands_and_an_empty_file_falls_back_to_accepted_at(self) -> None:
+        self.folder.update(end={"state": "failed", "at": AT.isoformat(),
+                                "error": {"code": "driver_failed", "message": "The Driver failed."}})
+        self.assertEqual(self.settle()[1]["settled"], "failed")
+        self.assertEqual(self.database.exchanges[X].error["code"], "driver_failed")
+        self.assertEqual(self.database.exchanges[X].ended_at, AT)
+
+    def test_the_end_line_is_used_when_the_record_has_no_end(self) -> None:
+        (self.folder.path / "events.jsonl").write_text(json.dumps(
+            {"n": 1, "end": {"state": "cancelled", "at": AT.isoformat()}}) + "\n")
+        self.assertEqual(self.settle()[1]["settled"], "cancelled")
+
+    def test_without_an_end_or_a_timestamp_the_database_acceptance_time_is_used(self) -> None:
+        self.assertEqual(self.settle()[1]["settled"], "interrupted")
+        self.assertEqual(self.database.exchanges[X].ended_at, AT)
+
+    def test_an_exchange_that_already_ended_keeps_its_state_and_end_time(self) -> None:
+        existing = self.database.exchanges[X]
+        existing.state, existing.ended_at = "completed", AT
+        self.assertEqual(self.settle()[1]["settled"], "completed")
+        self.assertEqual((existing.state, existing.ended_at), ("completed", AT))
+
+    def test_a_failed_save_keeps_the_folder_for_another_settle(self) -> None:
+        self.database.fail_end = 1
+        status, answer = self.settle()
+        self.assertEqual(status, 1)
+        self.assertEqual(answer["error"]["code"], "database_unavailable")  # type: ignore[index]
+        self.assertTrue(self.folder.path.exists())
+        self.assertEqual(self.database.closed, 1)
+        self.assertEqual(self.database.exchanges[X].state, "open")
+        self.assertTrue(self.folder.path.exists())

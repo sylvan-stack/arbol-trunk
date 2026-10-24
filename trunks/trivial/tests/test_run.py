@@ -151,8 +151,11 @@ class WholeExchange(unittest.TestCase):
         status, lines = self.run_trunk("--exchange", FIRST, "--chat", CHAT, "--driver", "claude", "--subscription",
                                        "anthropic", "--model", "sonnet", "What does build.sh do?")
         self.assertEqual(status, 0)
-        self.assertEqual(lines, ['{"accepted":true,"duplicate":false,"root":"rct","exchange":"' + FIRST + '",'
+        self.assertEqual(lines[:1], ['{"accepted":true,"duplicate":false,"root":"rct","exchange":"' + FIRST + '",'
                                  '"chat":"' + CHAT + '","number":1,"trunk":"trivial","build":"0"}'])
+        self.assertEqual([json.loads(line)["event"]["seq"] for line in lines[1:-1]],
+                         [event["seq"] for event in PLAIN])
+        self.assertEqual(json.loads(lines[-1])["end"]["state"], "completed")
         self.assertEqual((self.log / "starts").read_text().splitlines(),
                          [f"run --control --request {self.root}/exchanges/{FIRST}/run-1.json"])
         self.assertEqual(json.loads((self.log / "request-1.json").read_text()), {

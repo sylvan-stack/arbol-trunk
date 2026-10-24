@@ -5,11 +5,22 @@ from __future__ import annotations
 import os
 import signal
 import time
+from types import FrameType
 from typing import NoReturn
 
 from .clock import scaled, uptime
 
 GRACE_SECONDS = 5.0
+
+
+def install_handlers() -> None:
+    """SIGINT and foreground SIGHUP take the termination path too; detach() later ignores SIGHUP."""
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, _terminated)
+
+
+def _terminated(number: int, frame: FrameType | None) -> NoReturn:
+    end_group()
 
 
 def end_group() -> NoReturn:

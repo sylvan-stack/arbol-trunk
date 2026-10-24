@@ -25,6 +25,7 @@ from .process import started_at
 from .root import SECURITY
 from .run import Output, run_exchange
 from .start import Prepared, prepare
+from .termination import install_handlers
 
 Connector = Callable[[Prepared], Connect]
 
@@ -57,6 +58,7 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
 def main(args: list[str]) -> int:
     started = time.monotonic()
     lead_process_group()
+    install_handlers()
     return asyncio.run(start(args, home=Path.home(), started=started))
 
 

@@ -247,6 +247,23 @@ class WholeExchange(unittest.TestCase):
         self.assertEqual(self.database.exchanges[FIRST].error, error)
         self.assertEqual(len((self.log / "starts").read_text().splitlines()), 1)
 
+    def test_a_refusal_can_be_the_only_event_and_no_other_route_is_tried(self) -> None:
+        for code in ("rate_limited", "not_signed_in"):
+            with self.subTest(code=code):
+                self.database = FakeDatabase()
+                (self.log / "starts").unlink(missing_ok=True)
+                error = {"code": code, "message": "The selected route refused.", "retryable": True,
+                         "retryAfterSeconds": 1800, "details": {"route": "original"}}
+                self.events([{"runId": "RUN", "seq": 1, "type": "finished", "outcome": "failed", "error": error,
+                              "producedOutput": False, "unfinishedCalls": []}])
+                status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi",
+                                               small={"driver": "other", "model": "fallback"})
+                self.assertEqual(status, 1)
+                self.assertEqual(self.database.exchanges[FIRST].error, error)
+                self.assertEqual(json.loads(lines[-1])["end"]["error"], error)
+                self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["error"], error)
+                self.assertEqual(len((self.log / "starts").read_text().splitlines()), 1)
+
     def test_after_a_stop_line_before_the_run_no_run_starts_and_the_exchange_is_cancelled(self) -> None:
         self.database.delay = 0.3  # the acceptance takes a while; the stop line comes meanwhile
         status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi",

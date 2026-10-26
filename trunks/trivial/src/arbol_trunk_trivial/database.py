@@ -20,7 +20,7 @@ from psycopg.types.json import Jsonb
 
 from . import NAME
 from .history import HistoryRow
-from .rows import Row, jsonb
+from .rows import Row, RunRow, jsonb
 
 CALL_SECONDS = 5.0
 
@@ -243,7 +243,12 @@ class PostgresConnection:
         """One transaction: the rows not yet saved, and the final state, changing the Exchange only while it is open
         (RCT-2.20)."""
         async with self.connection.transaction(), self.connection.cursor() as cursor:
+            await within_limit(cursor.execute("SELECT replaced_by FROM exchanges WHERE id = %s FOR UPDATE", (exchange,)))
+            found = await cursor.fetchone()
+            replaced = found is not None and found[0] is not None
             for row in rows:
+                if replaced and not isinstance(row, RunRow):
+                    continue
                 sql, params = row.statement()
                 await within_limit(cursor.execute(sql, params))
             await within_limit(cursor.execute(

@@ -168,6 +168,8 @@ class FakeConnection:
         saves, failing = db.saves, db.fail_save
         db.fail_save = 0
         for row in rows:
+            if db.exchanges[exchange].replaced_by is not None and not isinstance(row, RunRow):
+                continue
             await self.save(row)
         db.fail_save, db.saves = failing, saves
         found = db.exchanges.get(exchange)

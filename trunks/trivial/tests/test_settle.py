@@ -202,6 +202,25 @@ class SavingSettlement(SettlementTest):
         self.assertEqual(status, 1)
         self.assertEqual(answer["error"]["code"], "database_unavailable")  # type: ignore[index]
         self.assertTrue(self.folder.path.exists())
+
         self.assertEqual(self.database.closed, 1)
         self.assertEqual(self.database.exchanges[X].state, "open")
         self.assertTrue(self.folder.path.exists())
+
+    def test_a_replaced_exchange_recovers_only_runs_and_keeps_its_ended_state(self) -> None:
+        stored = self.database.exchanges[X]
+        stored.state, stored.ended_at, stored.replaced_by = "completed", AT, "replacement"
+        lines = [
+            {"n": 1, "event": {"type": "started", "runId": "run", "at": AT.isoformat()}},
+            {"n": 2, "event": {"type": "text", "runId": "run", "text": "discarded"}},
+            {"n": 3, "event": {"type": "tool_started", "runId": "run", "callId": "call", "name": "shell",
+                                "input": {}, "at": AT.isoformat()}},
+            {"n": 4, "event": {"type": "usage", "runId": "run", "usage": {"inputTokens": 41},
+                                "at": AT.isoformat()}},
+        ]
+        (self.folder.path / "events.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+        self.assertEqual(self.settle(), (0, {"exchange": X, "settled": "completed"}))
+        self.assertEqual(self.database.messages, {})
+        self.assertEqual(self.database.tool_calls, {})
+        self.assertEqual(self.database.runs[(X, "run")]["usage"], {"inputTokens": 41})
+        self.assertEqual((stored.state, stored.ended_at, stored.replaced_by), ("completed", AT, "replacement"))

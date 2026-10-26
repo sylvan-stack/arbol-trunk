@@ -26,6 +26,7 @@ from .driver import CapabilityError, CapabilityStopped, Driver, DriverRun, capab
 from .end import End, cancelled, end_of_run, failed, finish, write_end
 from .errors import Refusal
 from .events import EventsFile
+from .life import SignsOfLife
 from .output import Output as Output
 from .request import run_request, write_request
 from .rows import RowMaker
@@ -121,7 +122,7 @@ class RunOver:
 
 
 async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, control: ControlFile | None = None,
-                clock: Clock = UPTIME) -> RunOver:
+                clock: Clock = UPTIME, life: SignsOfLife | None = None) -> RunOver:
     """The rounds of the loop for one run, until the run is over: its Driver's process has ended and its output has
     been read to the end, for at most one second after the process ended (TRV-0, "Stopping the run"). Each round waits
     at most one second for output, appends what arrived, and hands each new `stop` and `answer` line of `control`
@@ -149,6 +150,8 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
         for line in await run.read(wait):
             n = events.append_event(line)
             saver.add(maker.take(n, line.event))
+            if life is not None:
+                life.observe(line.event)
             if line.event.get("type") == "finished" and finished is None:
                 finished, finished_at = line.event, clock.now()
         for handed in control.read() if control is not None else []:
@@ -163,6 +166,8 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
         if kill_at is not None and run.returncode is None and clock.now() >= kill_at:
             run.kill()
             killed = True
+        if life is not None:
+            life.beat(life.waiting(driver=True))
         if run.returncode is not None:
             if run.output_ended:
                 break

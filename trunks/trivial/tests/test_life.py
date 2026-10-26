@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -5,10 +6,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from fake_driver import MovedClock
+from fake_driver import MovedClock, ScriptedDriver
+from fakes import FakeConnection, FakeDatabase
 
+from arbol_trunk_trivial.driver import Line
+from arbol_trunk_trivial.events import EventsFile
 from arbol_trunk_trivial.folder import ExchangeFolder
 from arbol_trunk_trivial.life import SignsOfLife, waiting_for
+from arbol_trunk_trivial.rows import Row, RowMaker
+from arbol_trunk_trivial.run import drive
+from arbol_trunk_trivial.saver import Saver
 
 X = "7f3a2c1e-4b5d-4e6f-8a9b-0c1d2e3f4a5b"
 AT = "2026-10-26T11:00:00.000Z"
@@ -92,3 +99,41 @@ class Waiting(LifeHome):
             self.life.observe({"runId": "run", **event})
             self.assertEqual(self.life.waiting(driver=True), expected)
         self.assertEqual(self.life.waiting(), "database")
+
+
+class RoundsWithLife(LifeHome):
+    def test_a_database_save_that_never_answers_holds_up_no_round_or_raise(self) -> None:
+        clock = self.clock
+
+        class YieldingDriver(ScriptedDriver):
+            async def read(self, seconds: float) -> list[Line]:
+                await asyncio.sleep(0)
+                return await super().read(seconds)
+
+        async def work() -> None:
+            entered = asyncio.Event()
+
+            async def slow(connection: FakeConnection, row: Row) -> None:
+                entered.set()
+                await asyncio.Future[None]()
+
+            driver = YieldingDriver(clock)
+            driver.at(0, "event", {"runId": "run", "type": "text", "text": "save this"})
+            driver.at(30, "event", {"runId": "run", "type": "finished", "outcome": "completed"})
+            driver.at(30, "exit", 0)
+            database = FakeDatabase()
+            saver = Saver(database.connect())
+            events = EventsFile(self.folder.path / "events.jsonl")
+            saver.start()
+            try:
+                with mock.patch.object(FakeConnection, "save", slow):
+                    await drive(driver, events, RowMaker(X), saver, clock=clock, life=self.life)
+                self.assertTrue(entered.is_set())
+                self.assertEqual(database.saves, [])
+                self.assertLessEqual(max(driver.waits), 1)
+                self.assertGreaterEqual(self.life.heartbeat, 30)
+                self.assertEqual(self.life.last_raised, clock.t)
+            finally:
+                events.close()
+                await saver.stop()
+        asyncio.run(work())

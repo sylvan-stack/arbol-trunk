@@ -58,3 +58,16 @@ class Watching(unittest.TestCase):
         watch.close()
         ended.assert_not_called()
         self.assertIsNone(watch.thread)
+
+
+class EndingTheGroup(unittest.TestCase):
+    def test_the_watch_uses_shared_group_termination_without_raising_or_writing(self) -> None:
+        clock = MovedClock()
+        life = SignsOfLife(clock=clock)
+        clock.t += 60
+        with mock.patch('arbol_trunk_trivial.watch.end_group') as end:
+            watch = Watch(life)
+            self.assertTrue(watch.look())
+        end.assert_called_once_with()
+        self.assertEqual(life.heartbeat, 0)
+        self.assertEqual(life.last_raised, clock.start)

@@ -89,6 +89,9 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
         end = folder_failed(error)
     except Exception as error:  # a defect of the Trunk still ends the Exchange (RCT-2.9)
         end = failed("trunk_failed", f"The Trunk failed: {type(error).__name__}: {error}")
+    await saver.stop()
+    if saver.rejected is not None and events.error is None and life.error is None:
+        end = failed("trunk_failed", str(saver.rejected))
     try:
         if events.error is None and life.error is None:
             write_end(events, folder, end)
@@ -143,6 +146,8 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         control.close()
     if events.error is not None or life.error is not None:
         return folder_failed(events.error or life.error)
+    if saver.rejected is not None:
+        return failed("trunk_failed", str(saver.rejected))
     if over.finished is None and not over.stopped and run.refusal is not None:
         return failed("driver_failed", run.refusal)
     return end_of_run(over.finished, stopped=over.stopped)
@@ -217,7 +222,8 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
         if life is not None:
             life.error = life.error or events.error
             life.beat(life.waiting(driver=True))
-        if stopped_at is None and (events.error is not None or (life is not None and life.error is not None)):
+        if stopped_at is None and (events.error is not None or saver.rejected is not None
+                                   or (life is not None and life.error is not None)):
             run.write_control('{"type":"stop"}')
             stopped_at = clock.now()
         kill_at = kill_time()

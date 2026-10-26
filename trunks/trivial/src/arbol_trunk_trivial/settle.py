@@ -180,7 +180,8 @@ async def _settle_locked(home: Path, root_id: str, exchange: str, *, security: s
             found = replay(pending.folder.path / "events.jsonl", exchange, pending.stored.accepted_at)
             end = final_end(pending.folder.record, found)
             async with asyncio.timeout(max(deadline - time.monotonic(), 0)):
-                await pending.connection.end(exchange, found.rows, end.state, end.at, end.error)
+                await pending.connection.end(exchange, found.rows, end.state, end.at, end.error,
+                                             end_written=bool(pending.folder.record.get("end") or found.end))
                 stored = await pending.connection.exchange_state(exchange)
             state = stored.state if stored is not None else "none"
             pending.folder.remove()

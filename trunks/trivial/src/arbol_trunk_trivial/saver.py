@@ -12,7 +12,7 @@ import contextlib
 from collections.abc import Sequence
 
 from .clock import scaled
-from .database import Connect, Connection, DatabaseUnavailable
+from .database import Connect, Connection, DatabaseUnavailable, RowRejected
 from .rows import Row
 
 RETRY_SECONDS = 5.0
@@ -23,8 +23,9 @@ class Saver:
         self.connect = connect
         self.connection = connection
         self.rows: list[Row] = []
-        self.saved = 0  # the rows before this index are in the database
+        self.saved = 0  # rows before this index have been saved or permanently refused
         self.failures = 0
+        self.rejected: RowRejected | None = None
         self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -51,6 +52,9 @@ class Saver:
                     self.connection = await self.connect()
                 await self.connection.save(self.rows[self.saved])
                 self.saved += 1
+            except RowRejected as error:
+                self.rejected = self.rejected or error
+                self.saved += 1  # never retry this row or block the rows after it
             except DatabaseUnavailable:
                 self.failures += 1
                 await self.give_up_connection()

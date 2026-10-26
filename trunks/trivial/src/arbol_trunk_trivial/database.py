@@ -20,7 +20,7 @@ from psycopg.types.json import Jsonb
 
 from . import NAME
 from .history import HistoryRow
-from .rows import Row, RunRow, jsonb
+from .rows import Row, RunRow, jsonb, row_line
 from .storage import stored
 
 CALL_SECONDS = 5.0
@@ -28,6 +28,19 @@ CALL_SECONDS = 5.0
 
 class DatabaseUnavailable(Exception):
     """A call to the database failed or did not end within its limit; the connection is given up."""
+
+
+class RowRejected(Exception):
+    """A row's value or constraint will fail on every retry (SQLSTATE class 22 or 23)."""
+
+    def __init__(self, row: Row) -> None:
+        self.line = row_line(row)
+        super().__init__(f"The database refused the row from line {self.line}.")
+
+
+def permanent(error: DatabaseUnavailable) -> bool:
+    cause = error.__cause__
+    return isinstance(cause, psycopg.Error) and str(cause.sqlstate)[:2] in {"22", "23"}
 
 
 class ChatBusy(Exception):
@@ -117,7 +130,7 @@ class Connection(Protocol):
     async def replacement(self, exchange: str) -> Replacement: ...
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
-                  error: dict[str, Any] | None) -> None: ...
+                  error: dict[str, Any] | None, *, end_written: bool = True) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -214,7 +227,12 @@ class PostgresConnection:
     async def save(self, row: Row) -> None:
         """One row, with an insert that does nothing when it is there, in a transaction of its own."""
         sql, params = row.statement()
-        await within_limit(self.connection.execute(sql, params))
+        try:
+            await within_limit(self.connection.execute(sql, params))
+        except DatabaseUnavailable as error:
+            if permanent(error):
+                raise RowRejected(row) from error
+            raise
 
     async def exchange_state(self, exchange: str) -> StoredExchange | None:
         async with self.connection.cursor() as cursor:
@@ -240,7 +258,7 @@ class PostgresConnection:
         return checked_replacement(found)
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
-                  error: dict[str, Any] | None) -> None:
+                  error: dict[str, Any] | None, *, end_written: bool = True) -> None:
         """One transaction: the rows not yet saved, and the final state, changing the Exchange only while it is open
         (RCT-2.20)."""
         async with self.connection.transaction(), self.connection.cursor() as cursor:
@@ -251,7 +269,16 @@ class PostgresConnection:
                 if replaced and not isinstance(row, RunRow):
                     continue
                 sql, params = row.statement()
-                await within_limit(cursor.execute(sql, params))
+                try:
+                    async with self.connection.transaction():  # a refused row rolls back only its savepoint
+                        await within_limit(cursor.execute(sql, params))
+                except DatabaseUnavailable as refused:
+                    if not permanent(refused):
+                        raise
+                    if not end_written:
+                        state = "failed"
+                        error = {"code": "trunk_failed", "message": str(RowRejected(row))}
+                        end_written = True  # keep the first refused line as the cause
             await within_limit(cursor.execute(
                 "UPDATE exchanges SET state = %s, ended_at = %s, error = %s WHERE id = %s AND state = 'open'",
                 stored((state, ended_at, jsonb(error), exchange))))

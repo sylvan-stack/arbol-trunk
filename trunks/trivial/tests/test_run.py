@@ -13,13 +13,15 @@ from typing import Any
 from unittest import mock
 
 from audit import opened_files
-from fakes import FakeDatabase
+from fakes import FakeConnection, FakeDatabase
 from stand_ins import security_stand_in, with_capabilities
 
 from arbol_trunk_trivial.command import handed, parse
+from arbol_trunk_trivial.database import RowRejected
 from arbol_trunk_trivial.events import EventsFile
 from arbol_trunk_trivial.folder import ExchangeFolder
 from arbol_trunk_trivial.root import roots_folder
+from arbol_trunk_trivial.rows import MessageRow, Row
 from arbol_trunk_trivial.run import Output, run_exchange
 from arbol_trunk_trivial.settings import settings_file
 from arbol_trunk_trivial.start import prepare
@@ -371,6 +373,30 @@ exit 1
         self.assertFalse((self.log / "starts").exists())
         self.assertEqual(self.database.exchanges[FIRST].error["code"], "folder_unwritable")
         self.assertTrue((self.root / "exchanges" / FIRST).is_dir())
+
+    def test_a_refused_row_stops_the_driver_and_fails_the_exchange_naming_its_line(self) -> None:
+        script = STOPPABLE.replace("IFS= read -r line", """printf '%s\\n' '{"runId":"'"$run"'","seq":3,"type":"text","text":"bad row"}'
+IFS= read -r line""")
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(script))
+        save = FakeConnection.save
+        refused: list[int] = []
+
+        async def reject(connection: FakeConnection, row: Row) -> None:
+            if isinstance(row, MessageRow) and row.text == "bad row":
+                refused.append(row.position)
+                raise RowRejected(row)
+            await save(connection, row)
+
+        with mock.patch.object(FakeConnection, "save", reject):
+            status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertEqual(refused, [3])
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "trunk_failed")
+        self.assertIn("line 3", self.database.exchanges[FIRST].error["message"])
+        self.assertEqual(json.loads(lines[-1])["end"]["error"], self.database.exchanges[FIRST].error)
+        self.assertTrue(self.database.tool_calls[(FIRST, 2)]["interrupted"])
+        self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
+        self.assertEqual(os.listdir(self.root / "exchanges"), [])
 
     def test_a_whole_start_reads_no_settings_file_but_its_own(self) -> None:
         settings_file(self.home).parent.mkdir(parents=True)

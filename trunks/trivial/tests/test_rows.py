@@ -48,7 +48,7 @@ class Rows(unittest.TestCase):
                         {"output": "#!/bin/sh\nset -e\n…", "exitCode": 0}),
             MessageRow(X, 6, "It compiles the three packages and copies them to dist/."),
             RunRow(X, RUN, "agent", "completed", {"model": "sonnet", "inputTokens": 5120, "outputTokens": 812}, None,
-                   STARTED, datetime(2026, 10, 15, 9, 30, 9, 800000, tzinfo=UTC)),
+                   STARTED, datetime(2026, 10, 15, 9, 30, 9, 800000, tzinfo=UTC), line=7),
         ])
 
     def test_a_sub_agents_text_is_no_row_and_its_calls_keep_their_parent(self) -> None:
@@ -82,7 +82,7 @@ class Rows(unittest.TestCase):
             ToolCallRow(X, 4, RUN, "call_1", None, "shell", {"command": "cat build.sh"}, False,
                         error="The Exchange ended before the tool call finished.", interrupted=True),
             RunRow(X, RUN, "agent", "interrupted", {}, None, STARTED,
-                   datetime(2026, 10, 15, 9, 30, 3, 400000, tzinfo=UTC)),
+                   datetime(2026, 10, 15, 9, 30, 3, 400000, tzinfo=UTC), line=4),
         ])
         self.assertEqual(maker.at_end([RUN]), [])
 

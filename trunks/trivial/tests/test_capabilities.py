@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 import tempfile
 import time
@@ -10,6 +11,7 @@ from unittest.mock import patch
 from arbol_trunk_trivial.driver import (
     CapabilityError,
     CapabilityStopped,
+    DriverRun,
     capabilities,
     capability_query,
     migration_ready,
@@ -84,3 +86,20 @@ class Capabilities(unittest.TestCase):
         with patch("arbol_trunk_trivial.driver.CAPABILITY_SECONDS", 0.1), self.assertRaises(CapabilityError):
             asyncio.run(capability_query(program, ["info"], str(self.home), lambda: False))
         self.assertLess(time.monotonic() - started, 3)
+
+    def test_capability_queries_and_the_run_launcher_stay_in_the_callers_process_group(self) -> None:
+        program = self.script("import json,os\nprint(json.dumps({'pid':os.getpid(),'group':os.getpgrp()}))\n")
+        query = asyncio.run(capability_query(program, ["info"], str(self.home), lambda: False))
+        self.assertEqual(query['group'], os.getpgrp())
+        self.assertNotEqual(query['pid'], os.getpid())
+
+        async def start() -> dict[str, int]:
+            request = self.home / 'request.json'
+            request.write_text('{}')
+            run = await DriverRun.start(program, request, str(self.home))
+            output, _ = await run.process.communicate()
+            result: dict[str, int] = json.loads(output)
+            return result
+        inference = asyncio.run(start())
+        self.assertEqual(inference['group'], os.getpgrp())
+        self.assertNotEqual(inference['pid'], os.getpid())

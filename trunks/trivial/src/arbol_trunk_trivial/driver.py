@@ -13,7 +13,6 @@ import asyncio
 import contextlib
 import json
 import os
-import signal
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -70,7 +69,7 @@ async def capability_query(launcher: str, arguments: list[str], cwd: str, stoppe
         raise CapabilityStopped
     process = await asyncio.create_subprocess_exec(
         launcher, *arguments, cwd=cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+        stderr=asyncio.subprocess.DEVNULL)
 
     async def collect() -> bytes:
         assert process.stdout is not None
@@ -98,7 +97,7 @@ async def capability_query(launcher: str, arguments: list[str], cwd: str, stoppe
             raise CapabilityError("Driver capability query returned invalid JSON.") from None
     finally:
         with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
+            process.kill()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await process.wait()

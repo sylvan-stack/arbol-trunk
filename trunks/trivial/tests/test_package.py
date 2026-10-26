@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +46,18 @@ class Packaging(unittest.TestCase):
         self.assertEqual(manifest["dependencies"], {"psycopg": "3.3.6", "psycopg-binary": "3.3.6"})
         with self.assertRaises(FileNotFoundError):
             copy_dependencies(self.base / "missing", "3.3.6", installed=self.base / "no-installed-packages")
+
+    def test_the_relocated_entry_execs_its_interpreter_and_preserves_arguments_and_pid(self) -> None:
+        package(str(self.output), root=self.source)
+        moved = self.base / "relocated package with spaces"
+        self.output.rename(moved)
+        report = self.base / "arguments"
+        args = ["--root", "two words", "", "run", "-leading-dash"]
+        process = subprocess.Popen([str(moved / "bin/arbol-trunk-trivial"), *args],
+                                   env={**os.environ, "PACKAGE_FIXTURE_REPORT": str(report)})
+        self.assertEqual(process.wait(timeout=10), 0)
+        lines = report.read_text().splitlines()
+        self.assertEqual(lines, [str(process.pid), "-I", "-B", str(moved / "bin/entry.py"), *args])
 
     def test_a_bad_cached_archive_is_refused_without_a_download_or_extraction(self) -> None:
         distribution = read_object(self.source / "scripts/python-distribution.json")["distributions"][target()]

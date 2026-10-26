@@ -24,7 +24,9 @@ def package_source(base: Path) -> tuple[Path, Path]:
     cache.mkdir()
     small = cache / "small.tar.gz"
     with tarfile.open(small, "w:gz") as bundle:
-        for name, data in (("python/bin/python3.14", b"#!/bin/sh\nprintf '3.14.8\\n'\n"),
+        for name, data in (("python/bin/python3.14", b"#!/bin/sh\nif [ \"$3\" = -c ]; then printf '3.14.8\\n'; exit 0; fi\n"
+                            b"if [ \"$3\" = compileall ]; then exit 0; fi\n"
+                            b"printf '%s\\n' \"$$\" \"$@\" > \"$PACKAGE_FIXTURE_REPORT\"\n"),
                            ("python/lib/python3.14/fixture.txt", b"runtime file\n")):
             item = tarfile.TarInfo(name)
             item.size, item.mode = len(data), 0o755 if "/bin/" in name else 0o644

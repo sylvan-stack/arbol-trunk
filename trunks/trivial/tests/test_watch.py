@@ -112,3 +112,55 @@ asyncio.run(work.run_exchange(None,None,build='0',process={{}},started=time.mono
             self.assertEqual((output, error), (b"", b""))
             self.assertEqual(marker.read_text(), "working\n")
             self.assertGreaterEqual(time.monotonic() - began, 0.6)
+
+
+class DeliberateHang(unittest.TestCase):
+    def test_the_first_event_is_whole_and_no_later_event_or_end_is_written(self) -> None:
+        source = Path(__file__).resolve().parents[1] / "src"
+        tests = Path(__file__).resolve().parent
+        with tempfile.TemporaryDirectory() as name:
+            folder = Path(name)
+            script = f"""
+import asyncio,sys
+from pathlib import Path
+sys.path[:0]=[{str(source)!r},{str(tests)!r}]
+from fake_driver import MovedClock,ScriptedDriver,event
+from fakes import FakeDatabase
+from arbol_trunk_trivial.events import EventsFile
+from arbol_trunk_trivial.folder import ExchangeFolder
+from arbol_trunk_trivial.life import SignsOfLife
+from arbol_trunk_trivial.rows import RowMaker
+from arbol_trunk_trivial.run import drive
+from arbol_trunk_trivial.saver import Saver
+from arbol_trunk_trivial.termination import install_handlers
+from arbol_trunk_trivial.watch import Watch
+install_handlers()
+record={{'signsOfLife':{{'heartbeat':0,'waitingFor':'driver','since':'2026-10-26T11:00:00.000Z'}}}}
+folder=ExchangeFolder.make(Path({name!r}), 'exchange', record)
+life=SignsOfLife(folder)
+watch=Watch(life);watch.start()
+clock=MovedClock();driver=ScriptedDriver(clock)
+driver.at(0,'event',event(1,'started'))
+driver.at(0.1,'event',event(2,'text',text='must not arrive'))
+asyncio.run(drive(driver,EventsFile(folder.path/'events.jsonl'),RowMaker('exchange'),
+                  Saver(FakeDatabase().connect()),clock=clock,life=life))
+"""
+            process = subprocess.Popen([sys.executable, "-I", "-B", "-c", script], stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, start_new_session=True,
+                                       env={**os.environ, "ARBOL_TEST_TIME_SCALE": "100", "ARBOL_TEST_HANG": "1"})
+            try:
+                output, error = process.communicate(timeout=5)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+            self.assertIn(process.returncode, (-signal.SIGKILL, 128 + signal.SIGKILL), error.decode())
+            self.assertEqual((output, error), (b"", b""))
+            import json
+            data = (folder / 'exchange/events.jsonl').read_bytes()
+            self.assertTrue(data.endswith(b'\n'))
+            lines = [json.loads(line) for line in data.splitlines()]
+            self.assertEqual(len(lines), 1)
+            self.assertEqual((lines[0]['n'], lines[0]['event']['type']), (1, 'started'))
+            record = json.loads((folder / 'exchange/record.json').read_text())
+            self.assertNotIn('end', record)

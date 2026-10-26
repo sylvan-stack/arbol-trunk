@@ -14,6 +14,8 @@ and its output has been read to the end, for at most one second after the proces
 
 from __future__ import annotations
 
+import os
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -146,6 +148,7 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
     stopped_at: float | None = None
     finished_at: float | None = None
     killed = False
+    first_event = True
 
     def kill_time() -> float | None:
         first = min((at for at in (stopped_at, finished_at) if at is not None), default=None)
@@ -160,6 +163,10 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
             wait = min(wait, max(kill_at - clock.now(), 0.0))
         for line in await run.read(wait):
             n = events.append_event(line)
+            if first_event:
+                first_event = False
+                if os.environ.get("ARBOL_TEST_HANG") == "1":
+                    threading.Event().wait()  # stop this work thread; only the independent watch can act
             saver.add(maker.take(n, line.event))
             if life is not None:
                 life.observe(line.event)

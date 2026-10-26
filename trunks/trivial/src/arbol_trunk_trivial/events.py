@@ -59,7 +59,7 @@ class EventsFile:
     def append_end(self, end: dict[str, Any]) -> int:
         n = self.n + 1
         self._append(json.dumps({"n": n, "end": end}, ensure_ascii=False, separators=(",", ":"))
-                     .encode("utf-8", "surrogatepass") + b"\n")
+                     .encode("utf-8", "backslashreplace") + b"\n")
         self.n = n
         return n
 

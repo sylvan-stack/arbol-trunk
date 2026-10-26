@@ -1,9 +1,11 @@
+import json
 import unittest
 from datetime import UTC, datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from arbol_trunk_trivial.folder import encode
 from arbol_trunk_trivial.rows import MessageRow, Row, RunRow, ToolCallRow
 from arbol_trunk_trivial.storage import stored
 
@@ -17,6 +19,12 @@ class Storage(unittest.TestCase):
         self.assertEqual(stored(value), {GOOD: [GOOD, "😀", "😀", "é\n\t\\\"\ufeff", 0, False, None]})
         self.assertEqual(value[BAD][:3], [BAD, "😀", "\ud83d\ude00"])
         self.assertEqual([stored("\ud83d"), stored("\ude00")], ["\ufffd", "\ufffd"])
+
+    def test_requests_and_records_keep_lone_surrogates_in_valid_utf8_json(self) -> None:
+        value = {"message": BAD, "emoji": "😀"}
+        self.assertEqual(json.loads(encode(value).decode("utf-8")), value)
+        self.assertIn(b"\\ud83d", encode(value))
+        self.assertIn("😀".encode(), encode(value))
 
     def test_every_text_and_jsonb_parameter_is_safe_without_changing_the_rows(self) -> None:
         rows: list[Row] = [MessageRow("x", 2, BAD),

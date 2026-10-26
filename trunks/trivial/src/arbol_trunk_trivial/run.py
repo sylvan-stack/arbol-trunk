@@ -25,7 +25,7 @@ from .control import ControlFile
 from .database import Connect
 from .detach import detach
 from .driver import CapabilityError, CapabilityStopped, Driver, DriverRun, capabilities, find_launcher, launcher_name
-from .end import End, cancelled, end_of_run, failed, finish, write_end
+from .end import End, cancelled, end_of_run, failed, save_end, write_end
 from .errors import Refusal
 from .events import EventsFile
 from .life import SignsOfLife
@@ -80,15 +80,38 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     saver = Saver(connect, exchange.connection)
     saver.start()
     try:
-        end = await one_run(prepared, exchange, events, maker, saver, search_path, life)
+        if events.error is not None or life.error is not None:
+            end = folder_failed(events.error or life.error)
+        else:
+            end = await one_run(prepared, exchange, events, maker, saver, search_path, life)
+    except OSError as error:
+        life.error = error
+        end = folder_failed(error)
     except Exception as error:  # a defect of the Trunk still ends the Exchange (RCT-2.9)
         end = failed("trunk_failed", f"The Trunk failed: {type(error).__name__}: {error}")
+    await saver.stop()
+    if saver.rejected is not None and events.error is None and life.error is None:
+        end = failed("trunk_failed", str(saver.rejected))
     try:
-        write_end(events, folder, end)
+        if events.error is None and life.error is None:
+            write_end(events, folder, end)
+    except OSError as error:
+        life.error = error
+        end = folder_failed(error)
     finally:
         events.close()
-    await life.wait(finish(saver, folder, maker.at_end(), end), "database")
+    life.error = life.error or events.error
+    saved = await life.wait(save_end(saver, folder.exchange, maker.at_end(), end), "database")
+    if saved and events.error is None and life.error is None:
+        try:
+            folder.remove()
+        except OSError:
+            pass  # the end already stands; settling can remove what cleanup left
     return end
+
+
+def folder_failed(error: OSError | None) -> End:
+    return failed("folder_unwritable", f"The Exchange's folder cannot be written: {error}.")
 
 
 async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, maker: RowMaker, saver: Saver,
@@ -110,6 +133,8 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
             await life.wait(capabilities(launcher, prepared.driver, prepared.handed.route.get("subscription"),
                                          prepared.handed.working_folder, prepared.root.folder.parents[4],
                                          lambda: any(line.kind == "stop" for line in control.read())), "driver")
+            if life.error is not None:
+                return folder_failed(life.error)
             run = await life.wait(DriverRun.start(launcher, request_file, prepared.handed.working_folder), "driver")
         except CapabilityStopped:
             return cancelled()
@@ -122,6 +147,12 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         await run.wait()  # the process has ended; this waits for no pipe (gh-119710)
     finally:
         control.close()
+    if events.error is not None or life.error is not None:
+        return folder_failed(events.error or life.error)
+    if saver.rejected is not None:
+        return failed("trunk_failed", str(saver.rejected))
+    if over.finished is None and not over.stopped and run.refusal is not None:
+        return failed("driver_failed", run.refusal)
     return end_of_run(over.finished, stopped=over.stopped)
 
 
@@ -162,7 +193,10 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
         if kill_at is not None and run.returncode is None:
             wait = min(wait, max(kill_at - clock.now(), 0.0))
         for line in await run.read(wait):
-            n = events.append_event(line)
+            try:
+                n = events.append_event(line)
+            except OSError:
+                n = events.append_event(line)  # the failed file is abandoned; retain this line for its rows
             if first_event:
                 first_event = False
                 if os.environ.get("ARBOL_TEST_HANG") == "1":
@@ -172,20 +206,33 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
                 life.observe(line.event)
             if line.event.get("type") == "finished" and finished is None:
                 finished, finished_at = line.event, clock.now()
-        for handed in control.read() if control is not None else []:
+        try:
+            handed_lines = control.read() if control is not None else []
+        except OSError as error:
+            events.error = error
+            handed_lines = []
+        for handed in handed_lines:
             if not run.write_control(handed.text):
                 continue
             if handed.kind == "answer":
-                events.append_answer(handed.text)
+                try:
+                    events.append_answer(handed.text)
+                except OSError:
+                    events.append_answer(handed.text)
                 saver.add(maker.take_answer(handed.value))
             elif stopped_at is None:
                 stopped_at = clock.now()
+        if life is not None:
+            life.error = life.error or events.error
+            life.beat(life.waiting(driver=True))
+        if stopped_at is None and (events.error is not None or saver.rejected is not None
+                                   or (life is not None and life.error is not None)):
+            run.write_control('{"type":"stop"}')
+            stopped_at = clock.now()
         kill_at = kill_time()
         if kill_at is not None and run.returncode is None and clock.now() >= kill_at:
             run.kill()
             killed = True
-        if life is not None:
-            life.beat(life.waiting(driver=True))
         if run.returncode is not None:
             if run.output_ended:
                 break

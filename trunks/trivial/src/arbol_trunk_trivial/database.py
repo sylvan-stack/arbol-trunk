@@ -8,7 +8,8 @@ database the address names. The limit of a call is not divided by ARBOL_TEST_TIM
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -20,13 +21,27 @@ from psycopg.types.json import Jsonb
 
 from . import NAME
 from .history import HistoryRow
-from .rows import Row, RunRow, jsonb
+from .rows import Row, RunRow, jsonb, row_line
+from .storage import stored
 
 CALL_SECONDS = 5.0
 
 
 class DatabaseUnavailable(Exception):
     """A call to the database failed or did not end within its limit; the connection is given up."""
+
+
+class RowRejected(Exception):
+    """A row's value or constraint will fail on every retry (SQLSTATE class 22 or 23)."""
+
+    def __init__(self, row: Row) -> None:
+        self.line = row_line(row)
+        super().__init__(f"The database refused the row from line {self.line}.")
+
+
+def permanent(error: DatabaseUnavailable) -> bool:
+    cause = error.__cause__
+    return isinstance(cause, psycopg.Error) and str(cause.sqlstate)[:2] in {"22", "23"}
 
 
 class ChatBusy(Exception):
@@ -115,8 +130,8 @@ class Connection(Protocol):
 
     async def replacement(self, exchange: str) -> Replacement: ...
 
-    async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
-                  error: dict[str, Any] | None) -> None: ...
+    async def end(self, exchange: str, rows: list[Row], state: str, ended_at: datetime,
+                  error: dict[str, Any] | None, *, end_written: bool = True) -> None: ...
 
     async def close(self) -> None: ...
 
@@ -139,6 +154,20 @@ async def within_limit[T](call: Awaitable[T]) -> T:
         raise DatabaseUnavailable(f"The database did not answer within {CALL_SECONDS:g} seconds.") from None
     except psycopg.Error as error:
         raise DatabaseUnavailable(str(error).strip() or type(error).__name__) from error
+
+
+@asynccontextmanager
+async def transaction(connection: psycopg.AsyncConnection[Any]) -> AsyncIterator[None]:
+    """Bound transaction commands too: BEGIN, SAVEPOINT, rollback and COMMIT can each lose the server."""
+    work = connection.transaction()
+    await within_limit(work.__aenter__())
+    try:
+        yield
+    except BaseException as error:
+        await within_limit(work.__aexit__(type(error), error, error.__traceback__))
+        raise
+    else:
+        await within_limit(work.__aexit__(None, None, None))
 
 
 BUSY = ("exchanges_one_open_per_chat", "exchanges_chat_id_number_key")
@@ -166,7 +195,7 @@ class PostgresConnection:
         next number in its chat, the message at position 0, and the history of the chat (RCT-2, TRV-D3)."""
         a = acceptance
         try:
-            async with self.connection.transaction(), self.connection.cursor() as cursor:
+            async with transaction(self.connection), self.connection.cursor() as cursor:
                 await within_limit(cursor.execute(
                     "INSERT INTO chats (id, created_at) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                     (a.chat, a.accepted_at)))
@@ -187,12 +216,12 @@ class PostgresConnection:
                 await within_limit(cursor.execute(
                     "INSERT INTO exchanges (id, chat_id, number, state, trunk, build, route, small_call_route,"
                     " working_folder, accepted_at) VALUES (%s, %s, %s, 'open', %s, %s, %s, %s, %s, %s)",
-                    (a.exchange, a.chat, number, a.trunk, a.build, Jsonb(a.route),
+                    stored((a.exchange, a.chat, number, a.trunk, a.build, Jsonb(a.route),
                      None if a.small_call_route is None else Jsonb(a.small_call_route), a.working_folder,
-                     a.accepted_at)))
+                     a.accepted_at))))
                 await within_limit(cursor.execute(
                     "INSERT INTO messages (exchange_id, position, role, text) VALUES (%s, 0, 'user', %s)",
-                    (a.exchange, message)))
+                    stored((a.exchange, message))))
                 if a.replaces is not None:
                     await within_limit(cursor.execute("UPDATE exchanges SET replaced_by = %s WHERE id = %s",
                                                       (a.exchange, a.replaces)))
@@ -213,7 +242,12 @@ class PostgresConnection:
     async def save(self, row: Row) -> None:
         """One row, with an insert that does nothing when it is there, in a transaction of its own."""
         sql, params = row.statement()
-        await within_limit(self.connection.execute(sql, params))
+        try:
+            await within_limit(self.connection.execute(sql, params))
+        except DatabaseUnavailable as error:
+            if permanent(error):
+                raise RowRejected(row) from error
+            raise
 
     async def exchange_state(self, exchange: str) -> StoredExchange | None:
         async with self.connection.cursor() as cursor:
@@ -238,22 +272,32 @@ class PostgresConnection:
             found = await cursor.fetchone()
         return checked_replacement(found)
 
-    async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
-                  error: dict[str, Any] | None) -> None:
+    async def end(self, exchange: str, rows: list[Row], state: str, ended_at: datetime,
+                  error: dict[str, Any] | None, *, end_written: bool = True) -> None:
         """One transaction: the rows not yet saved, and the final state, changing the Exchange only while it is open
         (RCT-2.20)."""
-        async with self.connection.transaction(), self.connection.cursor() as cursor:
+        async with transaction(self.connection), self.connection.cursor() as cursor:
             await within_limit(cursor.execute("SELECT replaced_by FROM exchanges WHERE id = %s FOR UPDATE", (exchange,)))
             found = await cursor.fetchone()
             replaced = found is not None and found[0] is not None
-            for row in rows:
+            for row in tuple(rows):
                 if replaced and not isinstance(row, RunRow):
                     continue
                 sql, params = row.statement()
-                await within_limit(cursor.execute(sql, params))
+                try:
+                    async with transaction(self.connection):  # a refused row rolls back only its savepoint
+                        await within_limit(cursor.execute(sql, params))
+                except DatabaseUnavailable as refused:
+                    if not permanent(refused):
+                        raise
+                    rows.remove(row)  # survive a later transaction/connection failure without retrying this row
+                    if not end_written:
+                        state = "failed"
+                        error = {"code": "trunk_failed", "message": str(RowRejected(row))}
+                        end_written = True  # keep the first refused line as the cause
             await within_limit(cursor.execute(
                 "UPDATE exchanges SET state = %s, ended_at = %s, error = %s WHERE id = %s AND state = 'open'",
-                (state, ended_at, jsonb(error), exchange)))
+                stored((state, ended_at, jsonb(error), exchange))))
 
     async def open_exchange(self, chat: str) -> str | None:
         try:

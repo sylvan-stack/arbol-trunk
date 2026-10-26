@@ -23,6 +23,7 @@ def waiting_for(*, answer: bool = False, tool: bool = False, driver: bool = Fals
 class SignsOfLife:
     def __init__(self, folder: ExchangeFolder | None = None, clock: Clock = UPTIME) -> None:
         self.folder = folder
+        self.error: OSError | None = None
         self.clock = clock
         self.last_raised = clock.now()
         self.heartbeat = 0
@@ -59,14 +60,18 @@ class SignsOfLife:
         return waiting_for(answer=bool(self.questions), tool=bool(self.tools), driver=driver, small_call=small_call)
 
     def beat(self, waiting: str | None = None) -> None:
-        """One completed round of work: replace the whole record, then publish the awake-clock time to the watch."""
+        """One completed round of work: try the whole record, then publish the awake-clock time to the watch."""
         if waiting is not None and waiting != self.waiting_for:
             if waiting not in ("answer", "tool", "driver", "small-call", "database"):
                 raise ValueError("An unknown wait cannot be a sign of life.")
             self.waiting_for, self.since = waiting, iso()
         heartbeat = self.heartbeat + 1
-        if self.folder is not None:
-            self.folder.update(signsOfLife={"heartbeat": heartbeat, "waitingFor": self.waiting_for, "since": self.since})
+        if self.folder is not None and self.error is None:
+            try:
+                self.folder.update(signsOfLife={"heartbeat": heartbeat, "waitingFor": self.waiting_for, "since": self.since})
+            except OSError as error:
+                self.error = error  # the work loop must still stop the Driver and try the database
+
         self.heartbeat = heartbeat
         self.last_raised = self.clock.now()
 

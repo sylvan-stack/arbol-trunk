@@ -6,6 +6,7 @@ import time
 import unittest
 from unittest import mock
 
+import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 from arbol_trunk_trivial import database
@@ -42,6 +43,31 @@ class Limit(unittest.TestCase):
             with self.assertRaises(DatabaseUnavailable):
                 asyncio.run(connect())
             self.assertLess(time.monotonic() - began, 3)
+
+    def test_call_timeout_remains_five_seconds_when_scenario_time_is_divided(self) -> None:
+        async def answer() -> int:
+            return 42
+
+        wait = asyncio.wait_for
+        with mock.patch.dict("os.environ", {"ARBOL_TEST_TIME_SCALE": "100"}), \
+                mock.patch("arbol_trunk_trivial.database.asyncio.wait_for", wraps=wait) as limited:
+            self.assertEqual(asyncio.run(database.within_limit(answer())), 42)
+        self.assertEqual(limited.call_args.args[1], 5)
+
+    def test_a_server_lost_at_commit_is_unavailable_and_transaction_commands_are_bounded(self) -> None:
+        connection = mock.MagicMock()
+        work = connection.transaction.return_value
+        work.__aexit__.side_effect = psycopg.errors.ConnectionFailure("The server went away at commit.")
+
+        async def transact() -> None:
+            async with database.transaction(connection):
+                pass
+
+        wait = asyncio.wait_for
+        with mock.patch("arbol_trunk_trivial.database.asyncio.wait_for", wraps=wait) as limited:
+            with self.assertRaises(DatabaseUnavailable):
+                asyncio.run(transact())
+        self.assertEqual([call.args[1] for call in limited.call_args_list], [5, 5])
 
     def test_a_server_that_is_not_there_is_unavailable(self) -> None:
         folder = tempfile.mkdtemp(prefix="trv-", dir="/tmp")

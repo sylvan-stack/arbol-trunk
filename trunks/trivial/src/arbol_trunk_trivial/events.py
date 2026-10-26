@@ -21,14 +21,24 @@ from .output import Output
 class EventsFile:
     def __init__(self, path: Path, output: Output | None = None) -> None:
         self.path = path
-        self.descriptor = os.open(path, os.O_WRONLY | os.O_APPEND)
+        self.error: OSError | None = None
+        try:
+            self.descriptor = os.open(path, os.O_WRONLY | os.O_APPEND)
+        except OSError as error:
+            self.descriptor, self.error = -1, error
         self.n = 0
         self.output = output
 
     def _append(self, data: bytes) -> None:
-        written = os.write(self.descriptor, data)
-        if written != len(data):
-            raise OSError(errno.EIO, f"Only {written} of {len(data)} bytes of a line reached {self.path}.")
+        if self.error is not None:
+            return  # keep numbering the held lines; the caller saves their rows straight to the database
+        try:
+            written = os.write(self.descriptor, data)
+            if written != len(data):
+                raise OSError(errno.EIO, f"Only {written} of {len(data)} bytes of a line reached {self.path}.")
+        except OSError as error:
+            self.error = error
+            raise
         if self.output is not None:
             self.output.line(data.decode("utf-8", "surrogatepass").removesuffix("\n"))
 
@@ -49,7 +59,7 @@ class EventsFile:
     def append_end(self, end: dict[str, Any]) -> int:
         n = self.n + 1
         self._append(json.dumps({"n": n, "end": end}, ensure_ascii=False, separators=(",", ":"))
-                     .encode("utf-8", "surrogatepass") + b"\n")
+                     .encode("utf-8", "backslashreplace") + b"\n")
         self.n = n
         return n
 

@@ -158,7 +158,7 @@ class FakeConnection:
                 "started": row.started, "ended_at": row.ended_at})
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
-                  error: dict[str, Any] | None) -> None:
+                  error: dict[str, Any] | None, *, end_written: bool = True) -> None:
         await self._call()
         db = self.database
         if db.fail_end:

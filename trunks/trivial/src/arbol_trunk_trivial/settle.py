@@ -62,7 +62,8 @@ def replay(path: Path, exchange: str, accepted_at: datetime) -> Replay:
                     rows.extend(maker.take(n, event))
             elif isinstance(small, dict) and small.get("type") == "finished":
                 rows.extend(replace(row, kind="small", started=None)
-                            for row in RowMaker(exchange).take(0, small) if isinstance(row, RunRow))
+                            for row in RowMaker(exchange).take(line["n"] if type(line.get("n")) is int else 0, small)
+                            if isinstance(row, RunRow))
             elif isinstance(line.get("answer"), dict):
                 maker.take_answer(line["answer"])
             elif isinstance(line.get("end"), dict):
@@ -180,7 +181,8 @@ async def _settle_locked(home: Path, root_id: str, exchange: str, *, security: s
             found = replay(pending.folder.path / "events.jsonl", exchange, pending.stored.accepted_at)
             end = final_end(pending.folder.record, found)
             async with asyncio.timeout(max(deadline - time.monotonic(), 0)):
-                await pending.connection.end(exchange, found.rows, end.state, end.at, end.error)
+                await pending.connection.end(exchange, found.rows, end.state, end.at, end.error,
+                                             end_written=bool(pending.folder.record.get("end") or found.end))
                 stored = await pending.connection.exchange_state(exchange)
             state = stored.state if stored is not None else "none"
             pending.folder.remove()

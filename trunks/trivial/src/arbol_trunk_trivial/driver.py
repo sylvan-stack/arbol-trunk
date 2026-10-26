@@ -79,7 +79,8 @@ async def capability_query(launcher: str, arguments: list[str], cwd: str, stoppe
             if len(data) > CAPABILITY_BYTES:
                 raise CapabilityError("Driver capability output exceeds its bound.")
         if await process.wait() != 0:
-            raise CapabilityError("Driver capability query failed; check its settings and selected Subscription.")
+            reason = launcher_refusal(bytes(data))
+            raise CapabilityError(reason or "Driver capability query failed; check its settings and selected Subscription.")
         return bytes(data)
 
     task = asyncio.create_task(collect())
@@ -153,6 +154,18 @@ class Line:
     event: dict[str, Any]
 
 
+def launcher_refusal(raw: bytes) -> str | None:
+    """A launcher's JSON refusal is diagnostic output, not a Driver event."""
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return None
+    error = value.get("error") if isinstance(value, dict) else None
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        return f"The launcher refused: {error.get('code', 'launch_failed')}: {error['message']}"
+    return None
+
+
 def as_event(raw: bytes) -> Line | None:
     try:
         text = raw.decode("utf-8").rstrip("\r\n\t ")
@@ -187,6 +200,7 @@ class DriverRun:
         self.process = process
         self._buffer = b""
         self._ended = False
+        self.refusal: str | None = None
 
     @classmethod
     async def start(cls, launcher: str, request_file: Path, working_folder: str) -> DriverRun:
@@ -222,11 +236,17 @@ class DriverRun:
         if not chunk:
             self._ended = True
             rest, self._buffer = self._buffer, b""
-            line = as_event(rest) if rest.strip() else None
+            line = self._line(rest) if rest.strip() else None
             return [line] if line else []
         self._buffer += chunk
         *whole, self._buffer = self._buffer.split(b"\n")
-        return [line for line in (as_event(raw) for raw in whole) if line is not None]
+        return [line for line in (self._line(raw) for raw in whole) if line is not None]
+
+    def _line(self, raw: bytes) -> Line | None:
+        line = as_event(raw)
+        if line is None and self.refusal is None:
+            self.refusal = launcher_refusal(raw)
+        return line
 
     async def _exit(self, seconds: float) -> None:
         deadline = time.monotonic() + seconds

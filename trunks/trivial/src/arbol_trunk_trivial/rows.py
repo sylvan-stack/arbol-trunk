@@ -21,6 +21,8 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from .storage import stored
+
 INTERRUPTED_CALL = "The Exchange ended before the tool call finished."
 
 Statement = tuple[str, tuple[Any, ...]]
@@ -48,7 +50,7 @@ class MessageRow:
 
     def statement(self) -> Statement:
         return ("INSERT INTO messages (exchange_id, position, role, text) VALUES (%s, %s, 'assistant', %s)"
-                " ON CONFLICT DO NOTHING", (self.exchange, self.position, self.text))
+                " ON CONFLICT DO NOTHING", stored((self.exchange, self.position, self.text)))
 
 
 @dataclass(frozen=True)
@@ -72,9 +74,9 @@ class ToolCallRow:
         return ("INSERT INTO tool_calls (exchange_id, position, run_id, call_id, parent_call_id, name, input, ok,"
                 " result, error, truncated, interrupted, ask, answer)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (self.exchange, self.position, self.run_id, self.call_id, self.parent_call_id, self.name,
+                stored((self.exchange, self.position, self.run_id, self.call_id, self.parent_call_id, self.name,
                  Jsonb(self.input), self.ok, jsonb(self.result), self.error, self.truncated, self.interrupted,
-                 jsonb(self.ask), jsonb(self.answer)))
+                 jsonb(self.ask), jsonb(self.answer))))
 
 
 @dataclass(frozen=True)
@@ -87,15 +89,20 @@ class RunRow:
     error: Any
     started: Any
     ended_at: datetime
+    line: int = 0
 
     def statement(self) -> Statement:
         return ("INSERT INTO runs (exchange_id, run_id, kind, outcome, usage, error, started, ended_at)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (self.exchange, self.run_id, self.kind, self.outcome, Jsonb(self.usage), jsonb(self.error),
-                 jsonb(self.started), self.ended_at))
+                stored((self.exchange, self.run_id, self.kind, self.outcome, Jsonb(self.usage), jsonb(self.error),
+                 jsonb(self.started), self.ended_at)))
 
 
 Row = MessageRow | ToolCallRow | RunRow
+
+
+def row_line(row: Row) -> int:
+    return row.line if isinstance(row, RunRow) else row.position
 
 
 def text(value: Any) -> str | None:
@@ -111,6 +118,7 @@ class RowMaker:
         self.started: dict[str, dict[str, Any]] = {}
         self.usage: dict[str, dict[str, Any]] = {}
         self.last_at: dict[str, Any] = {}
+        self.last_n: dict[str, int] = {}
         self.finished: set[str] = set()
         self.seen: list[str] = []  # the runs that gave an event, in order
         self.asks: dict[tuple[str, str], tuple[str, Any]] = {}  # (runId, callId) to the askId and ask of its question
@@ -119,6 +127,7 @@ class RowMaker:
     def take(self, n: int, event: dict[str, Any]) -> list[Row]:
         run_id = text(event.get("runId")) or ""
         kind = event.get("type")
+        self.last_n[run_id] = n
         if run_id not in self.seen:
             self.seen.append(run_id)
         if "at" in event:
@@ -155,7 +164,7 @@ class RowMaker:
             carried = event.get("usage")
             usage: dict[str, Any] = carried if isinstance(carried, dict) else self.usage.get(run_id, {})
             return [RunRow(self.exchange, run_id, "agent", outcome, usage, error, self.started.get(run_id),
-                           moment(event.get("at")))]
+                           moment(event.get("at")), n)]
         return []
 
     def take_answer(self, value: dict[str, Any]) -> list[Row]:
@@ -187,5 +196,5 @@ class RowMaker:
             if run_id not in self.finished:
                 self.finished.add(run_id)
                 rows.append(RunRow(self.exchange, run_id, "agent", "interrupted", self.usage.get(run_id, {}), None,
-                                   self.started.get(run_id), moment(self.last_at.get(run_id))))
+                                   self.started.get(run_id), moment(self.last_at.get(run_id)), self.last_n.get(run_id, 0)))
         return rows

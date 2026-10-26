@@ -13,11 +13,15 @@ from typing import Any
 from unittest import mock
 
 from audit import opened_files
-from fakes import FakeDatabase
+from fakes import FakeConnection, FakeDatabase
 from stand_ins import security_stand_in, with_capabilities
 
 from arbol_trunk_trivial.command import handed, parse
+from arbol_trunk_trivial.database import RowRejected
+from arbol_trunk_trivial.events import EventsFile
+from arbol_trunk_trivial.folder import ExchangeFolder
 from arbol_trunk_trivial.root import roots_folder
+from arbol_trunk_trivial.rows import MessageRow, Row
 from arbol_trunk_trivial.run import Output, run_exchange
 from arbol_trunk_trivial.settings import settings_file
 from arbol_trunk_trivial.start import prepare
@@ -223,12 +227,15 @@ class WholeExchange(unittest.TestCase):
         self.assertEqual(record["end"], lines[-1]["end"])
 
     def test_a_driver_that_is_not_on_the_search_path_fails_the_exchange_with_driver_failed(self) -> None:
-        status, _lines = self.run_trunk("--exchange", FIRST, "--driver", "cluade", "hi")
-        self.assertEqual(status, 1)
-        error = self.database.exchanges[FIRST].error
-        self.assertEqual(error["code"], "driver_failed")
-        self.assertIn("arbol-cluade-driver", error["message"])
-        self.assertEqual(self.database.runs, {})
+        for driver in ("cluade", "some/path"):
+            with self.subTest(driver=driver):
+                self.database = FakeDatabase()
+                status, _lines = self.run_trunk("--exchange", FIRST, "--driver", driver, "hi")
+                self.assertEqual(status, 1)
+                error = self.database.exchanges[FIRST].error
+                self.assertEqual(error["code"], "driver_failed")
+                self.assertIn(f"arbol-{driver}-driver", error["message"])
+                self.assertEqual(self.database.runs, {})
 
     def test_a_driver_that_ends_without_finished_fails_it_and_its_run_is_interrupted(self) -> None:
         self.events(PLAIN[:4])
@@ -238,6 +245,24 @@ class WholeExchange(unittest.TestCase):
         self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["outcome"], "interrupted")
         self.assertTrue(self.database.tool_calls[(FIRST, 4)]["interrupted"])
 
+    def test_a_launchers_refusal_is_kept_in_the_failure_message(self) -> None:
+        refusal = """#!/bin/sh
+printf '%s\\n' '{"error":{"code":"build_unavailable","message":"No working Build of this Driver."}}'
+exit 1
+"""
+        for query_refused in (True, False):
+            with self.subTest(query_refused=query_refused):
+                self.database = FakeDatabase()
+                (self.bin / "arbol-claude-driver").write_text(
+                    refusal if query_refused else with_capabilities(refusal))
+                status, _lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+                self.assertEqual(status, 1)
+                error = self.database.exchanges[FIRST].error
+                self.assertEqual(error["code"], "driver_failed")
+                self.assertIn("build_unavailable", error["message"])
+                self.assertIn("No working Build of this Driver.", error["message"])
+                self.assertFalse((self.log / "starts").exists())
+
     def test_a_failed_run_keeps_the_drivers_error_whole(self) -> None:
         error = {"code": "rate_limited", "message": "…", "retryable": True, "retryAfterSeconds": 1800}
         self.events([PLAIN[0], {"runId": "RUN", "seq": 2, "type": "finished", "outcome": "failed", "error": error,
@@ -246,6 +271,23 @@ class WholeExchange(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(self.database.exchanges[FIRST].error, error)
         self.assertEqual(len((self.log / "starts").read_text().splitlines()), 1)
+
+    def test_a_refusal_can_be_the_only_event_and_no_other_route_is_tried(self) -> None:
+        for code in ("rate_limited", "not_signed_in"):
+            with self.subTest(code=code):
+                self.database = FakeDatabase()
+                (self.log / "starts").unlink(missing_ok=True)
+                error = {"code": code, "message": "The selected route refused.", "retryable": True,
+                         "retryAfterSeconds": 1800, "details": {"route": "original"}}
+                self.events([{"runId": "RUN", "seq": 1, "type": "finished", "outcome": "failed", "error": error,
+                              "producedOutput": False, "unfinishedCalls": []}])
+                status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi",
+                                               small={"driver": "other", "model": "fallback"})
+                self.assertEqual(status, 1)
+                self.assertEqual(self.database.exchanges[FIRST].error, error)
+                self.assertEqual(json.loads(lines[-1])["end"]["error"], error)
+                self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["error"], error)
+                self.assertEqual(len((self.log / "starts").read_text().splitlines()), 1)
 
     def test_after_a_stop_line_before_the_run_no_run_starts_and_the_exchange_is_cancelled(self) -> None:
         self.database.delay = 0.3  # the acceptance takes a while; the stop line comes meanwhile
@@ -283,6 +325,77 @@ class WholeExchange(unittest.TestCase):
         call = self.database.tool_calls[(FIRST, 2)]
         self.assertEqual((call["name"], call["ok"], call["interrupted"]), ("shell", False, True))
         self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["outcome"], "cancelled")
+        self.assertEqual(os.listdir(self.root / "exchanges"), [])
+
+    def test_a_failed_events_write_stops_the_driver_saves_held_rows_and_leaves_the_folder(self) -> None:
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(STOPPABLE))
+        append = EventsFile._append
+
+        def fail(file: EventsFile, data: bytes) -> None:
+            if file.error is None and b'tool_started' in data:
+                file.error = PermissionError("The file became read-only.")
+                raise file.error
+            append(file, data)
+
+        with mock.patch.object(EventsFile, "_append", fail):
+            status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "folder_unwritable")
+        self.assertTrue(self.database.tool_calls[(FIRST, 2)]["interrupted"])
+        self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["outcome"], "cancelled")
+        folder = self.root / "exchanges" / FIRST
+        self.assertEqual(len((folder / "events.jsonl").read_text().splitlines()), 1)
+        self.assertNotIn("end", json.loads((folder / "record.json").read_text()))
+        self.assertFalse(any('"end"' in line for line in lines))
+
+    def test_a_failed_heartbeat_stops_the_driver_and_preserves_rows_already_held(self) -> None:
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(STOPPABLE))
+        update = ExchangeFolder.update
+
+        def fail(folder: ExchangeFolder, **fields: Any) -> None:
+            if (folder.path / "events.jsonl").stat().st_size > 0:
+                raise PermissionError("The folder became read-only.")
+            update(folder, **fields)
+
+        with mock.patch.object(ExchangeFolder, "update", fail):
+            status, _ = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "folder_unwritable")
+        self.assertTrue(self.database.tool_calls[(FIRST, 2)]["interrupted"])
+        self.assertTrue((self.root / "exchanges" / FIRST).is_dir())
+
+    def test_a_failed_request_write_never_starts_a_driver_and_ends_directly_in_the_database(self) -> None:
+        with mock.patch("arbol_trunk_trivial.run.write_request", side_effect=PermissionError("No write access.")):
+            status, _ = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertFalse((self.log / "starts").exists())
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "folder_unwritable")
+        self.assertTrue((self.root / "exchanges" / FIRST).is_dir())
+
+    def test_a_refused_row_stops_the_driver_and_fails_the_exchange_naming_its_line(self) -> None:
+        script = STOPPABLE.replace("IFS= read -r line", """printf '%s\\n' '{"runId":"'"$run"'","seq":3,"type":"text","text":"bad row"}'
+IFS= read -r line""")
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(script))
+        save = FakeConnection.save
+        refused: list[int] = []
+
+        async def reject(connection: FakeConnection, row: Row) -> None:
+            if isinstance(row, MessageRow) and row.text == "bad row":
+                refused.append(row.position)
+                raise RowRejected(row)
+            await save(connection, row)
+
+        with mock.patch.object(FakeConnection, "save", reject):
+            status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertEqual(refused, [3])
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "trunk_failed")
+        self.assertIn("line 3", self.database.exchanges[FIRST].error["message"])
+        self.assertEqual(json.loads(lines[-1])["end"]["error"], self.database.exchanges[FIRST].error)
+        self.assertTrue(self.database.tool_calls[(FIRST, 2)]["interrupted"])
+        self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
         self.assertEqual(os.listdir(self.root / "exchanges"), [])
 
     def test_a_whole_start_reads_no_settings_file_but_its_own(self) -> None:

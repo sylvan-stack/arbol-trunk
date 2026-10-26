@@ -41,7 +41,7 @@ def write_file(path: Path, data: bytes) -> None:
 
 
 def encode(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "surrogatepass")
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "backslashreplace")
 
 
 class ExchangeFolder:

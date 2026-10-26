@@ -9,9 +9,11 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import urllib.request
+from email.parser import Parser
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +64,22 @@ def file_digests(folder: Path) -> dict[str, str]:
             if path.is_file() and str(path.relative_to(folder)) not in MUTABLE}
 
 
+def copy_dependencies(folder: Path, version: str, *, installed: Path | None = None) -> None:
+    source = installed or Path(sysconfig.get_path("purelib"))
+    destination = folder / "runtime/python/lib/python3.14/site-packages"
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in ("psycopg", "psycopg_binary"):
+        record = source / f"{name}-{version}.dist-info"
+        headers = Parser().parsestr((record / "METADATA").read_text())
+        if headers["Version"] != version:
+            raise ValueError(f"The installed {name} does not match its locked version.")
+        for item in (source / name, record):
+            shutil.copytree(item, destination / item.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    libraries = source / "psycopg_binary.libs"
+    if libraries.is_dir():
+        shutil.copytree(libraries, destination / libraries.name)
+
+
 def package(candidate: str | None = None, *, root: Path = ROOT) -> Path:
     folder, number = build_folder(candidate, root=root)
     root = root.resolve()
@@ -85,11 +103,16 @@ def package(candidate: str | None = None, *, root: Path = ROOT) -> Path:
                             check=True, capture_output=True, text=True, cwd=folder)
     if result.stdout.strip() != pin["version"]:
         raise ValueError("The unpacked interpreter has the wrong version.")
+    copy_dependencies(folder, psycopg)
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
     for name in ("src", "tests", "scripts", "bin"):
         shutil.copytree(root / name, folder / name, ignore=ignore)
     for name in ("package.json", "pyproject.toml", ".python-version", "uv.lock", "arbol-build.json", "README.md"):
         shutil.copy2(root / name, folder / name)
+    # Child processes of the unit fixtures sometimes omit -B. Prebuild their caches so checks do not mutate the image.
+    subprocess.run([str(interpreter), "-I", "-m", "compileall", "-q", "-j", "2", str(runtime / "python/lib/python3.14"),
+                    str(folder / "src"), str(folder / "scripts"), str(folder / "tests")],
+                   check=True, capture_output=True, cwd=folder)
     manifest = {"format": 1, "component": COMPONENT, "packageVersion": version, "entry": ENTRY,
                 "build": number, "candidate": candidate is not None, "rootContracts": [1],
                 "source": source_provenance(root),

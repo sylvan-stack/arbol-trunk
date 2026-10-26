@@ -7,7 +7,7 @@ from unittest import mock
 from package_fixtures import package_source
 
 from scripts.build_support import digest, read_object, target
-from scripts.package_build import archive, package
+from scripts.package_build import archive, copy_dependencies, package
 
 
 class Packaging(unittest.TestCase):
@@ -32,6 +32,18 @@ class Packaging(unittest.TestCase):
         self.assertEqual(manifest["source"]["componentPath"], "trunks/trivial")
         with self.assertRaisesRegex(ValueError, "already holds"):
             package(str(self.output), root=self.source)
+
+    def test_both_psycopg_packages_and_their_metadata_are_copied_into_the_build(self) -> None:
+        package(str(self.output), root=self.source)
+        library = self.output / "runtime/python/lib/python3.14/site-packages"
+        manifest = read_object(self.output / "package-manifest.json")
+        for name in ("psycopg", "psycopg_binary"):
+            self.assertTrue((library / name / "__init__.py").is_file())
+            self.assertTrue((library / f"{name}-3.3.6.dist-info/METADATA").is_file())
+        self.assertTrue(any("psycopg_binary/" in path and path.endswith(".so") for path in manifest["files"]))
+        self.assertEqual(manifest["dependencies"], {"psycopg": "3.3.6", "psycopg-binary": "3.3.6"})
+        with self.assertRaises(FileNotFoundError):
+            copy_dependencies(self.base / "missing", "3.3.6", installed=self.base / "no-installed-packages")
 
     def test_a_bad_cached_archive_is_refused_without_a_download_or_extraction(self) -> None:
         distribution = read_object(self.source / "scripts/python-distribution.json")["distributions"][target()]

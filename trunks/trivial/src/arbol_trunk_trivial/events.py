@@ -17,6 +17,8 @@ from typing import Any
 from .driver import Line
 from .output import Output
 
+TOOL_OUTPUT_BYTES = 1024 * 1024
+
 
 class EventsFile:
     def __init__(self, path: Path, output: Output | None = None) -> None:
@@ -28,6 +30,7 @@ class EventsFile:
             self.descriptor, self.error = -1, error
         self.n = 0
         self.output = output
+        self.tool_bytes: dict[tuple[str, str], int] = {}
 
     def _append(self, data: bytes) -> None:
         if self.error is not None:
@@ -42,11 +45,18 @@ class EventsFile:
         if self.output is not None:
             self.output.line(data.decode("utf-8", "surrogatepass").removesuffix("\n"))
 
-    def append_event(self, line: Line) -> int:
-        """Appends the event under the next `n`, and gives that `n`."""
+    def append_event(self, line: Line) -> int | None:
+        """Append an event under the next n; omitted tool-output fragments take no number (RCT-1.12)."""
+        output = line.event.get("type") == "tool_output_delta"
+        key = (str(line.event.get("runId", "")), str(line.event.get("callId", "")))
+        if output and self.tool_bytes.get(key, 0) > TOOL_OUTPUT_BYTES:
+            return None
         n = self.n + 1
-        self._append(b'{"n":%d,"event":%s}\n' % (n, line.text.encode("utf-8", "surrogatepass")))
+        data = b'{"n":%d,"event":%s}\n' % (n, line.text.encode("utf-8", "surrogatepass"))
+        self._append(data)
         self.n = n
+        if output and self.error is None:
+            self.tool_bytes[key] = self.tool_bytes.get(key, 0) + len(data)
         return n
 
     def append_answer(self, text: str) -> int:

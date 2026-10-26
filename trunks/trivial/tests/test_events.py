@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from arbol_trunk_trivial.driver import as_event
+from arbol_trunk_trivial.driver import Line, as_event
 from arbol_trunk_trivial.events import EventsFile
 
 EVENTS = [
@@ -44,6 +44,37 @@ class Events(unittest.TestCase):
             self.file.append_event(line)
         self.assertEqual(write.call_count, 1)
         self.assertTrue(write.call_args.args[1].endswith(b"\n"))
+
+    def test_tool_output_stops_after_one_mib_but_other_lines_and_calls_go_on_without_n_gaps(self) -> None:
+        def append(kind: str, run: str = "run", call: str = "call") -> int | None:
+            event = {"type": kind, "runId": run, "callId": call, "text": "x" * 40000}
+            return self.file.append_event(Line(json.dumps(event), event))
+
+        numbers = [append("tool_output_delta") for _ in range(60)]
+        self.assertIn(None, numbers)
+        self.assertIsNotNone(append("text"))
+        self.assertIsNotNone(append("tool_finished"))
+        self.assertIsNotNone(append("tool_output_delta", call="another"))
+        self.assertIsNotNone(append("tool_output_delta", run="another"))
+        raw = self.path.read_bytes().splitlines(keepends=True)
+        output = [line for line in raw if (event := json.loads(line)["event"])["type"] == "tool_output_delta"
+                  and event["runId"] == "run" and event["callId"] == "call"]
+        total = sum(map(len, output))
+        self.assertGreater(total, 1024 * 1024)
+        self.assertLessEqual(total, 1024 * 1024 + max(map(len, output)))
+        self.assertEqual([json.loads(line)["n"] for line in raw], list(range(1, len(raw) + 1)))
+
+    def test_tool_output_counts_utf8_envelope_and_newline_bytes(self) -> None:
+        event = {"type": "tool_output_delta", "runId": "r", "callId": "c", "text": "😀" * 20}
+        line = Line(json.dumps(event, ensure_ascii=False), event)
+        with mock.patch("arbol_trunk_trivial.events.TOOL_OUTPUT_BYTES", 200):
+            self.assertEqual(self.file.append_event(line), 1)
+            self.assertEqual(self.file.append_event(line), 2)
+            self.assertIsNone(self.file.append_event(line))
+        data = self.path.read_bytes()
+        self.assertEqual(self.file.tool_bytes[("r", "c")], len(data))
+        self.assertGreater(len(data), 200)
+        self.assertEqual([json.loads(raw)["event"] for raw in data.splitlines()], [event, event])
 
     def test_a_line_that_does_not_reach_the_file_whole_is_an_error(self) -> None:
         line = as_event(EVENTS[0])

@@ -197,11 +197,12 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
                 n = events.append_event(line)
             except OSError:
                 n = events.append_event(line)  # the failed file is abandoned; retain this line for its rows
-            if first_event:
+            if first_event and n is not None:
                 first_event = False
                 if os.environ.get("ARBOL_TEST_HANG") == "1":
                     threading.Event().wait()  # stop this work thread; only the independent watch can act
-            saver.add(maker.take(n, line.event))
+            if n is not None:
+                saver.add(maker.take(n, line.event))
             if life is not None:
                 life.observe(line.event)
             if line.event.get("type") == "finished" and finished is None:

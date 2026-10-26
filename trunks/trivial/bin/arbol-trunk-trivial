@@ -1,7 +1,12 @@
 #!/bin/sh
-# The Trivial Trunk run from its checkout: the folder's own Python from `uv sync`, isolated from the caller's Python
-# settings, replacing this script so that the Trunk keeps the process identifier it was started with (RCT-2).
-# A Build carries an entry of its own that starts its own interpreter (TRV-0).
-set -eu
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec "$root/.venv/bin/python" -I -B "$root/bin/entry.py" "$@"
+trunk_bin=${0%/*}
+[ "$trunk_bin" != "$0" ] || trunk_bin=.
+trunk_dir=$(CDPATH= cd -- "$trunk_bin/.." && pwd -P) || exit 1
+if [ -x "$trunk_dir/runtime/python/bin/python3.14" ]; then
+    exec "$trunk_dir/runtime/python/bin/python3.14" -I -B "$trunk_dir/bin/entry.py" "$@"
+fi
+if [ -e "$trunk_dir/package-manifest.json" ] || [ -e "$trunk_dir/build.json" ]; then
+    printf '%s\n' 'The Trivial Trunk package is missing its interpreter.' >&2
+    exit 1
+fi
+exec "$trunk_dir/.venv/bin/python" -I -B "$trunk_dir/bin/entry.py" "$@"

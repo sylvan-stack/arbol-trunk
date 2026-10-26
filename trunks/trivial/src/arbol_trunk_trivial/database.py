@@ -130,7 +130,7 @@ class Connection(Protocol):
 
     async def replacement(self, exchange: str) -> Replacement: ...
 
-    async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
+    async def end(self, exchange: str, rows: list[Row], state: str, ended_at: datetime,
                   error: dict[str, Any] | None, *, end_written: bool = True) -> None: ...
 
     async def close(self) -> None: ...
@@ -272,7 +272,7 @@ class PostgresConnection:
             found = await cursor.fetchone()
         return checked_replacement(found)
 
-    async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
+    async def end(self, exchange: str, rows: list[Row], state: str, ended_at: datetime,
                   error: dict[str, Any] | None, *, end_written: bool = True) -> None:
         """One transaction: the rows not yet saved, and the final state, changing the Exchange only while it is open
         (RCT-2.20)."""
@@ -280,7 +280,7 @@ class PostgresConnection:
             await within_limit(cursor.execute("SELECT replaced_by FROM exchanges WHERE id = %s FOR UPDATE", (exchange,)))
             found = await cursor.fetchone()
             replaced = found is not None and found[0] is not None
-            for row in rows:
+            for row in tuple(rows):
                 if replaced and not isinstance(row, RunRow):
                     continue
                 sql, params = row.statement()
@@ -290,6 +290,7 @@ class PostgresConnection:
                 except DatabaseUnavailable as refused:
                     if not permanent(refused):
                         raise
+                    rows.remove(row)  # survive a later transaction/connection failure without retrying this row
                     if not end_written:
                         state = "failed"
                         error = {"code": "trunk_failed", "message": str(RowRejected(row))}

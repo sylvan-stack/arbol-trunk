@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import CODE_NAME
+from .claim import claim_folder
 from .clock import iso
 from .database import (
     Acceptance,
@@ -133,7 +134,14 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
         record["smallCallRoute"] = handed.small_call_route
     record["workingFolder"] = handed.working_folder
     record["signsOfLife"] = {"heartbeat": 0, "waitingFor": "database", "since": iso()}
-    folder = ExchangeFolder.make(prepared.root.exchanges, exchange, record)
+    try:
+        folder = await claim_folder(prepared.root.exchanges, exchange, record, started + ACCEPTANCE_SECONDS)
+    except Refusal as refusal:
+        if handed.exchange is not None and refusal.code == "in_progress":
+            prior = await find_prior(connect, handed.exchange, started + ACCEPTANCE_SECONDS)
+            if prior is not None:
+                raise Repeated(prepared.root.identifier, prior) from None
+        raise
     accepted_at = datetime.now(UTC)
     try:
         connection, accepted = await accept_in_database(connect, Acceptance(

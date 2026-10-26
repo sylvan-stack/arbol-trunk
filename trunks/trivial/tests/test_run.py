@@ -292,6 +292,7 @@ class WholeExchange(unittest.TestCase):
         with opened_files() as files:
             self.run_trunk("--exchange", FIRST, "hi")
         outside = sorted({os.path.relpath(file, self.home) for file in files if file.startswith(str(self.home))
+                          and not os.path.isdir(file)
                           and f"/exchanges/{FIRST}" not in file and "/exchanges/." not in file})
         self.assertEqual(outside, [".arbol/arbol-trunk/trivial.json", ".arbol/database.json", ".arbol/pi-cutover.json",
                                    "Library/Application Support/Arbol/roots/rct/root.json", "start.json"])

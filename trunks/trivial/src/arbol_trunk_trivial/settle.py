@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -15,30 +14,11 @@ from .end import End
 from .errors import Refusal
 from .folder import ExchangeFolder
 from .output import Output
-from .process import started_at
+from .process import process_alive as process_alive
 from .root import SECURITY, database_address, find_root, keychain_password, read_json, role
 from .rows import Row, RowMaker, RunRow, moment
 
 DATABASE_SECONDS = 10.0  # not divided by ARBOL_TEST_TIME_SCALE (RCT-4)
-
-
-def process_alive(process: Any) -> bool:
-    """The PID must still have the recorded start time, give or take two seconds (RCT-1)."""
-    if not isinstance(process, dict) or not isinstance(process.get("pid"), int) or isinstance(process["pid"], bool):
-        raise Refusal("trunk_failed", "The Exchange record names no process.")
-    try:
-        recorded = datetime.fromisoformat(process["startedAt"])
-        if recorded.tzinfo is None or process["pid"] <= 0:
-            raise ValueError("A process needs a positive PID and an absolute start time.")
-    except (KeyError, TypeError, ValueError):
-        raise Refusal("trunk_failed", "The Exchange record names no readable process start time.") from None
-    try:
-        actual = datetime.fromisoformat(started_at(process["pid"]))
-    except subprocess.CalledProcessError:
-        return False
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        raise Refusal("trunk_failed", "The recorded process could not be checked safely.") from None
-    return abs((actual - recorded).total_seconds()) <= 2
 
 
 @dataclass

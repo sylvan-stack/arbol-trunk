@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib
 import json
 import os
+import pwd
+import shlex
 import subprocess
 import sys
 import unittest
@@ -138,9 +141,62 @@ def unit(folder: Path) -> int:
     return 0 if unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful() else 1
 
 
+def live_fixture(folder: Path, owner: Path) -> Any:
+    # The same external readonly checkout as contract-1. No Root code is copied into this package (TRV-D21).
+    root = owner / "repos/sylvan-stack/readonly/arbol-root"
+    if read_object(root / "package.json").get("name") != "@sylvan-stack/arbol-root":
+        raise ValueError("The live check needs the readonly arbol-root checkout used by contract-1.")
+    sys.path.insert(0, str(root / "contract/conformance"))
+    fixture = importlib.import_module("rct_conformance.home").ScenarioHome
+    return fixture.create("live", [str(folder / ENTRY)], 1, root / "contract/1/layout.sql",
+                          python=str(folder / "runtime/python/bin/python3.14"))
+
+
+def driver_bridge(launcher: Path, owner: Path, state: Path) -> None:
+    driver = owner / ".local/bin/arbol-claude-driver"
+    if not driver.is_file() or not os.access(driver, os.X_OK):
+        raise ValueError("The live check needs the installed Claude Driver.")
+    quote = shlex.quote
+    launcher.write_text("#!/bin/sh\n" + f"HOME={quote(str(owner))} "
+                        f"PATH={quote(str(owner / '.local/bin') + ':/usr/bin:/bin:/usr/sbin:/sbin')} "
+                        f"exec {quote(str(driver))} --state-dir {quote(str(state))} \"$@\"\n")
+    launcher.chmod(0o755)
+
+
+def live(folder: Path, *, owner: Path | None = None) -> int:
+    owner = owner or Path(pwd.getpwuid(os.getuid()).pw_dir)
+    state_text = os.environ.get("ARBOL_BUILD_TEST_STATE_DIR",
+                                str(owner / "Library/Application Support/Arbol/drivers/arbol-claude-driver"))
+    if not state_text or not Path(state_text).is_absolute():
+        raise ValueError("live: ARBOL_BUILD_TEST_STATE_DIR must be an absolute test state directory.")
+    fixture = live_fixture(folder, owner)
+    try:
+        driver_bridge(fixture.standin / "bin/arbol-claude-driver", owner, Path(state_text))
+        result = fixture.run(["run", "--driver", "claude", "--subscription", "test-anthropic", "--model", "haiku",
+                              "Answer with the single word: ready"], scale=None, seconds=300)
+        if result.status != 0:
+            print(json.dumps({"check": "live", "passed": False, "exitStatus": result.status,
+                              "output": result.output}), flush=True)
+            return 1
+        exchanges = fixture.rows("SELECT id, state, build, route FROM exchanges")
+        messages = fixture.rows("SELECT role, text FROM messages WHERE role = 'assistant'")
+        runs = fixture.rows("SELECT kind, outcome, usage, started FROM runs")
+        if (len(exchanges) != 1 or exchanges[0]["state"] != "completed" or not messages
+                or len(runs) != 1 or runs[0]["kind"] != "agent" or runs[0]["outcome"] != "completed"
+                or not runs[0]["usage"] or not isinstance(runs[0]["started"], dict)
+                or runs[0]["started"].get("subscriptionId") != "test-anthropic"):
+            raise ValueError("live: the completed Exchange, assistant answer or test-account run and usage are missing.")
+        print(json.dumps({"check": "live", "passed": True, "exchange": exchanges[0]["id"],
+                          "build": exchanges[0]["build"], "subscription": "test-anthropic", "model": "haiku",
+                          "usage": runs[0]["usage"]}), flush=True)
+        return 0
+    finally:
+        fixture.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("metadata", "unit"))
+    parser.add_argument("mode", choices=("metadata", "unit", "live"))
     parser.add_argument("--candidate", help="Absolute development package folder")
     args = parser.parse_args()
     try:
@@ -157,7 +213,7 @@ def main() -> int:
             return 0
         program_policy(folder, value)
         runtime_probe(folder)
-        status = unit(folder)
+        status = live(folder) if args.mode == "live" else unit(folder)
         verify(folder, candidate=args.candidate is not None)
         return status
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:

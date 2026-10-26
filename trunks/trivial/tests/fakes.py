@@ -17,7 +17,9 @@ from arbol_trunk_trivial.database import (
     DatabaseUnavailable,
     DuplicateExchange,
     PriorExchange,
+    Replacement,
     StoredExchange,
+    checked_replacement,
 )
 from arbol_trunk_trivial.history import HistoryRow
 from arbol_trunk_trivial.rows import MessageRow, Row, RunRow, ToolCallRow
@@ -88,6 +90,16 @@ class FakeConnection:
         found = self.database.exchanges.get(exchange)
         return PriorExchange(found.id, found.chat, found.number, found.trunk, found.build) if found is not None else None
 
+    async def replacement(self, exchange: str) -> Replacement:
+        await self._call()
+        db = self.database
+        found = db.exchanges.get(exchange)
+        if found is None:
+            return checked_replacement(None)
+        last = max(e.number for e in db.exchanges.values() if e.chat == found.chat)
+        return checked_replacement((found.chat, found.state, found.replaced_by, found.number, last,
+                                    db.messages.get((exchange, 0), (None, None))[1]))
+
     async def _call(self) -> None:
         if self.database.delay:
             await asyncio.sleep(self.database.delay)
@@ -99,6 +111,8 @@ class FakeConnection:
             prior = await self.find_exchange(a.exchange)
             assert prior is not None
             raise DuplicateExchange(prior)
+        if a.replaces is not None:
+            await self.replacement(a.replaces)
         numbers = [e.number for e in db.exchanges.values() if e.chat == a.chat]
         if any(e.chat == a.chat and e.state == "open" for e in db.exchanges.values()):
             raise ChatBusy(next(e.id for e in db.exchanges.values() if e.chat == a.chat and e.state == "open"))
@@ -107,6 +121,10 @@ class FakeConnection:
         db.exchanges[a.exchange] = Exchange(a.exchange, a.chat, number, "open", a.trunk, a.build, a.route,
                                             a.small_call_route, a.working_folder, a.accepted_at)
         db.messages[(a.exchange, 0)] = ("user", a.message)
+        if a.replaces is not None:
+            db.exchanges[a.replaces].replaced_by = a.exchange
+            db.messages = {key: value for key, value in db.messages.items() if key[0] != a.replaces}
+            db.tool_calls = {key: value for key, value in db.tool_calls.items() if key[0] != a.replaces}
         rows: list[HistoryRow] = []
         for exchange in db.exchanges.values():
             if exchange.chat != a.chat or exchange.number >= number or exchange.replaced_by is not None:

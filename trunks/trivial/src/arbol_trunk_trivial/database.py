@@ -50,6 +50,7 @@ class Acceptance:
     small_call_route: dict[str, Any] | None
     working_folder: str
     accepted_at: datetime
+    replaces: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,29 @@ class DuplicateExchange(Exception):
         self.prior = prior
 
 
+@dataclass(frozen=True)
+class Replacement:
+    chat: str
+    message: str
+
+
+class ReplacementRefused(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def checked_replacement(found: Sequence[Any] | None) -> Replacement:
+    if found is None:
+        raise ReplacementRefused("not_found", "The Exchange to replace does not exist.")
+    chat, state, replaced_by, number, last, message = found
+    if state == "open" or replaced_by is not None or number != last:
+        raise ReplacementRefused("cannot_replace", "Only the chat's last ended, unreplaced Exchange can be sent again.")
+    if message is None:
+        raise ReplacementRefused("trunk_failed", "The Exchange to replace has no stored message.")
+    return Replacement(str(chat), str(message))
+
+
 class Connection(Protocol):
     """The calls the Trunk makes on its Root's database."""
 
@@ -88,6 +112,8 @@ class Connection(Protocol):
     async def exchange_state(self, exchange: str) -> StoredExchange | None: ...
 
     async def find_exchange(self, exchange: str) -> PriorExchange | None: ...
+
+    async def replacement(self, exchange: str) -> Replacement: ...
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
                   error: dict[str, Any] | None) -> None: ...
@@ -144,6 +170,16 @@ class PostgresConnection:
                 await within_limit(cursor.execute(
                     "INSERT INTO chats (id, created_at) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                     (a.chat, a.accepted_at)))
+                await within_limit(cursor.execute("SELECT id FROM chats WHERE id = %s FOR UPDATE", (a.chat,)))
+                message = a.message
+                if a.replaces is not None:
+                    prior = await self.find_exchange(a.exchange)
+                    if prior is not None:
+                        raise DuplicateExchange(prior)
+                    replacement = await self.replacement(a.replaces)
+                    if replacement.chat != a.chat:
+                        raise ReplacementRefused("invalid_input", "The handed chat differs from the replaced Exchange's chat.")
+                    message = replacement.message
                 await within_limit(cursor.execute(
                     "SELECT coalesce(max(number), 0) + 1 FROM exchanges WHERE chat_id = %s", (a.chat,)))
                 found = await cursor.fetchone()
@@ -156,7 +192,12 @@ class PostgresConnection:
                      a.accepted_at)))
                 await within_limit(cursor.execute(
                     "INSERT INTO messages (exchange_id, position, role, text) VALUES (%s, 0, 'user', %s)",
-                    (a.exchange, a.message)))
+                    (a.exchange, message)))
+                if a.replaces is not None:
+                    await within_limit(cursor.execute("UPDATE exchanges SET replaced_by = %s WHERE id = %s",
+                                                      (a.exchange, a.replaces)))
+                    await within_limit(cursor.execute("DELETE FROM messages WHERE exchange_id = %s", (a.replaces,)))
+                    await within_limit(cursor.execute("DELETE FROM tool_calls WHERE exchange_id = %s", (a.replaces,)))
                 await within_limit(cursor.execute(HISTORY, {"chat": a.chat, "number": number}))
                 rows = await cursor.fetchall()
         except DatabaseUnavailable as error:
@@ -186,6 +227,16 @@ class PostgresConnection:
                                               " FROM exchanges WHERE id = %s", (exchange,)))
             found = await cursor.fetchone()
         return PriorExchange(str(found[0]), str(found[1]), int(found[2]), str(found[3]), str(found[4])) if found else None
+
+    async def replacement(self, exchange: str) -> Replacement:
+        async with self.connection.cursor() as cursor:
+            await within_limit(cursor.execute(
+                "SELECT e.chat_id::text, e.state, e.replaced_by, e.number,"
+                " (SELECT max(number) FROM exchanges WHERE chat_id = e.chat_id), m.text"
+                " FROM exchanges e LEFT JOIN messages m ON m.exchange_id = e.id AND m.position = 0"
+                " WHERE e.id = %s", (exchange,)))
+            found = await cursor.fetchone()
+        return checked_replacement(found)
 
     async def end(self, exchange: str, rows: Sequence[Row], state: str, ended_at: datetime,
                   error: dict[str, Any] | None) -> None:

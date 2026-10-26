@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from unittest import mock
 
 from fakes import FakeConnection, FakeDatabase
@@ -150,9 +151,11 @@ async def main():
         print("claimed")
 asyncio.run(main())
 """
+        source = Path(__file__).resolve().parents[1] / "src"
+        code = f"import sys; sys.path.insert(0, {str(source)!r})\n" + code
         async def check() -> None:
             async with root_lock(self.exchanges, time.monotonic() + 1):
-                result = await asyncio.to_thread(subprocess.run, [sys.executable, "-B", "-c", code,
+                result = await asyncio.to_thread(subprocess.run, [sys.executable, "-I", "-B", "-c", code,
                                                                   str(self.exchanges), X],
                                                   capture_output=True, text=True, timeout=5, check=True)
                 self.assertEqual(result.stdout.strip(), "database_unavailable")

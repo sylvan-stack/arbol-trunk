@@ -43,6 +43,16 @@ class Limit(unittest.TestCase):
                 asyncio.run(connect())
             self.assertLess(time.monotonic() - began, 3)
 
+    def test_call_timeout_remains_five_seconds_when_scenario_time_is_divided(self) -> None:
+        async def answer() -> int:
+            return 42
+
+        wait = asyncio.wait_for
+        with mock.patch.dict("os.environ", {"ARBOL_TEST_TIME_SCALE": "100"}), \
+                mock.patch("arbol_trunk_trivial.database.asyncio.wait_for", wraps=wait) as limited:
+            self.assertEqual(asyncio.run(database.within_limit(answer())), 42)
+        self.assertEqual(limited.call_args.args[1], 5)
+
     def test_a_server_that_is_not_there_is_unavailable(self) -> None:
         folder = tempfile.mkdtemp(prefix="trv-", dir="/tmp")
         self.addCleanup(os.rmdir, folder)

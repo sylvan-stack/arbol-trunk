@@ -4,7 +4,8 @@ import unittest
 from collections.abc import Callable, Sequence
 from unittest import mock
 
-from fakes import FakeDatabase
+from fake_driver import MovedClock
+from fakes import FakeConnection, FakeDatabase
 
 from arbol_trunk_trivial import saver
 from arbol_trunk_trivial.rows import MessageRow, Row
@@ -94,6 +95,43 @@ class Saving(unittest.TestCase):
             took = asyncio.run(go())
         self.assertGreaterEqual(took, 0.09)
         self.assertLess(took, 1.0)
+
+    def test_retries_wait_five_scaled_seconds_on_new_connections_and_keep_row_order(self) -> None:
+        clock = MovedClock()
+        database = FakeDatabase(fail_save=2)
+        sleep = asyncio.sleep
+        waits: list[float] = []
+        attempts: list[tuple[float, int, int]] = []
+        save = FakeConnection.save
+
+        async def advance(seconds: float) -> None:
+            waits.append(seconds)
+            clock.t += seconds
+            await sleep(0)
+
+        async def record(connection: FakeConnection, row: Row) -> None:
+            assert isinstance(row, MessageRow)
+            attempts.append((clock.since_start(), database.connections, row.position))
+            await save(connection, row)
+
+        async def work() -> None:
+            keeper = Saver(database.connect())
+            keeper.add(rows(3, 4))
+            keeper.start()
+            for _ in range(100):
+                await sleep(0)
+                if keeper.saved == 2:
+                    break
+            await keeper.stop()
+            self.assertEqual(keeper.saved, 2)
+
+        with mock.patch.dict("os.environ", {"ARBOL_TEST_TIME_SCALE": "10"}), \
+                mock.patch("arbol_trunk_trivial.saver.asyncio.sleep", advance), \
+                mock.patch.object(FakeConnection, "save", record):
+            asyncio.run(work())
+        self.assertEqual(waits, [0.5, 0.5])
+        self.assertEqual(attempts, [(0, 1, 3), (0.5, 2, 3), (1, 3, 3), (1, 3, 4)])
+        self.assertEqual(database.closed, 2)
 
     def test_what_is_not_saved_when_it_stops_stays_for_the_end(self) -> None:
         database = FakeDatabase(fail_connect=100)

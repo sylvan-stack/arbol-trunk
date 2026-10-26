@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
+from fake_driver import MovedClock
 from fakes import Exchange, FakeDatabase
 
 from arbol_trunk_trivial.end import End, end_of_run, finish, write_end
@@ -92,6 +93,25 @@ class SavingTheEnd(unittest.TestCase):
         self.assertGreaterEqual(self.database.connections, 10)
         self.assertEqual(os.listdir(self.exchanges), [X])
         self.assertEqual(self.database.exchanges[X].state, "open")
+
+    def test_the_last_tries_stop_at_sixty_scaled_seconds_on_a_moved_clock(self) -> None:
+        clock = MovedClock()
+        self.database.fail_end = 1000
+        waits: list[float] = []
+
+        async def advance(seconds: float) -> None:
+            waits.append(seconds)
+            clock.t += seconds
+
+        with mock.patch.dict("os.environ", {"ARBOL_TEST_TIME_SCALE": "10"}), \
+                mock.patch("arbol_trunk_trivial.end.uptime", clock.now), \
+                mock.patch("arbol_trunk_trivial.end.asyncio.sleep", advance):
+            self.assertFalse(self.finish([], [], End("completed", datetime.now(UTC))))
+        self.assertEqual(waits, [0.5] * 12)
+        self.assertEqual(clock.since_start(), 6)
+        self.assertEqual(self.database.connections, 13)
+        self.assertEqual(self.database.closed, 13)
+        self.assertTrue(self.folder.path.exists())
 
     def test_a_database_back_within_the_60_seconds_takes_the_end(self) -> None:
         self.database.fail_end = 2

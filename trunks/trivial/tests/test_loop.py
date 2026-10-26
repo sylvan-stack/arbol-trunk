@@ -154,6 +154,16 @@ class StoppingTheRun(LoopTest):
         self.drive()
         self.assertEqual(self.driver.killed_at, 17.0)
 
+    def test_a_full_file_sends_the_same_stop_and_kills_a_driver_that_does_not_end(self) -> None:
+        self.driver.at(0.1, "event", event(1, "started"))
+        self.driver.at(0.5, "event", event(2, "text", text="x" * 2000))
+        with mock.patch("arbol_trunk_trivial.events.FILE_BYTES", 200):
+            self.drive()
+        self.assertTrue(self.events.full)
+        self.assertEqual(self.driver.control, [(0.5, STOP)])
+        self.assertEqual(self.driver.killed_at, 16.5)
+        self.assertEqual([line["event"]["type"] for line in self.lines()], ["started"])
+
     def test_a_run_that_completed_before_the_stop_reached_it_keeps_its_outcome(self) -> None:
         self.driver.at(0.5, "control", STOP)
         self.driver.at(0.7, "event", finished(1, "completed"))

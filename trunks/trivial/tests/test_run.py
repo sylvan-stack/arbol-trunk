@@ -398,6 +398,31 @@ IFS= read -r line""")
         self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
         self.assertEqual(os.listdir(self.root / "exchanges"), [])
 
+    def test_a_full_file_fails_the_exchange_and_keeps_only_rows_from_written_lines(self) -> None:
+        with mock.patch("arbol_trunk_trivial.events.FILE_BYTES", 500):
+            status, raw = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        lines = [json.loads(line) for line in raw[1:]]
+        self.assertEqual(status, 1)
+        self.assertEqual(lines[-1]["end"]["error"]["code"], "events_file_full")
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "events_file_full")
+        self.assertEqual([line["n"] for line in lines], list(range(1, len(lines) + 1)))
+        written = {line["n"] for line in lines if line.get("event", {}).get("type") == "tool_started"}
+        self.assertTrue({position for exchange, position in self.database.tool_calls if exchange == FIRST} <= written)
+        self.assertEqual(self.database.messages, {(FIRST, 0): ("user", "hi"), **{
+            (FIRST, line["n"]): ("assistant", line["event"]["text"]) for line in lines
+            if line.get("event", {}).get("type") == "text"}})
+        self.assertEqual(os.listdir(self.root / "exchanges"), [])
+
+    def test_an_end_that_is_the_first_line_past_the_limit_is_itself_failed(self) -> None:
+        event = {"type": "finished", "runId": "RUN", "seq": 1, "outcome": "completed"}
+        self.events([event])
+        written = '{"n":1,"event":' + json.dumps({**event, "runId": f"{FIRST}.1"}) + '}\n'
+        with mock.patch("arbol_trunk_trivial.events.FILE_BYTES", len(written.encode()) + 1):
+            status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertEqual(json.loads(lines[-1])["end"]["error"]["code"], "events_file_full")
+        self.assertEqual(self.database.exchanges[FIRST].state, "failed")
+
     def test_a_whole_start_reads_no_settings_file_but_its_own(self) -> None:
         settings_file(self.home).parent.mkdir(parents=True)
         settings_file(self.home).write_text(json.dumps({"driver": "claude"}))

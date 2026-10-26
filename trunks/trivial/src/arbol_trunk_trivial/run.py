@@ -94,6 +94,8 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
         end = failed("trunk_failed", str(saver.rejected))
     try:
         if events.error is None and life.error is None:
+            if events.end_fills(end.value()):
+                end = file_full()
             write_end(events, folder, end)
     except OSError as error:
         life.error = error
@@ -108,6 +110,10 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
         except OSError:
             pass  # the end already stands; settling can remove what cleanup left
     return end
+
+
+def file_full() -> End:
+    return failed("events_file_full", "The Exchange's events file reached its 256 MiB limit.")
 
 
 def folder_failed(error: OSError | None) -> End:
@@ -149,6 +155,8 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         control.close()
     if events.error is not None or life.error is not None:
         return folder_failed(events.error or life.error)
+    if events.full:
+        return file_full()
     if saver.rejected is not None:
         return failed("trunk_failed", str(saver.rejected))
     if over.finished is None and not over.stopped and run.refusal is not None:
@@ -217,16 +225,17 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
                 continue
             if handed.kind == "answer":
                 try:
-                    events.append_answer(handed.text)
+                    answer_n = events.append_answer(handed.text)
                 except OSError:
-                    events.append_answer(handed.text)
-                saver.add(maker.take_answer(handed.value))
+                    answer_n = events.append_answer(handed.text)
+                if answer_n is not None:
+                    saver.add(maker.take_answer(handed.value))
             elif stopped_at is None:
                 stopped_at = clock.now()
         if life is not None:
             life.error = life.error or events.error
             life.beat(life.waiting(driver=True))
-        if stopped_at is None and (events.error is not None or saver.rejected is not None
+        if stopped_at is None and (events.error is not None or events.full or saver.rejected is not None
                                    or (life is not None and life.error is not None)):
             run.write_control('{"type":"stop"}')
             stopped_at = clock.now()

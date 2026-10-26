@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Coroutine
 from typing import Any
 
-from .clock import UPTIME, Clock, iso
+from .clock import UPTIME, Clock, iso, scaled
 from .folder import ExchangeFolder
+
+POLL_SECONDS = 1.0
 
 
 def waiting_for(*, answer: bool = False, tool: bool = False, driver: bool = False, small_call: bool = False) -> str:
@@ -65,3 +69,16 @@ class SignsOfLife:
             self.folder.update(signsOfLife={"heartbeat": heartbeat, "waitingFor": self.waiting_for, "since": self.since})
         self.heartbeat = heartbeat
         self.last_raised = self.clock.now()
+
+    async def wait[T](self, work: Coroutine[Any, Any, T], waiting: str) -> T:
+        """The calling work loop polls a bounded startup/save operation; no independent timer raises a heartbeat."""
+        task = asyncio.create_task(work)
+        try:
+            while not task.done():
+                self.beat(waiting)
+                await asyncio.wait({task}, timeout=scaled(POLL_SECONDS))
+            return task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)

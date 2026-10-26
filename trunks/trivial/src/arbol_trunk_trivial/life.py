@@ -26,7 +26,6 @@ class SignsOfLife:
         self.error: OSError | None = None
         self.clock = clock
         self.last_raised = clock.now()
-        self.ended = False
         self.heartbeat = 0
         self.waiting_for = "database"
         self.since = iso()
@@ -67,7 +66,7 @@ class SignsOfLife:
                 raise ValueError("An unknown wait cannot be a sign of life.")
             self.waiting_for, self.since = waiting, iso()
         heartbeat = self.heartbeat + 1
-        if self.folder is not None and self.error is None and not self.ended:
+        if self.folder is not None and self.error is None:
             try:
                 self.folder.update(signsOfLife={"heartbeat": heartbeat, "waitingFor": self.waiting_for, "since": self.since})
             except OSError as error:

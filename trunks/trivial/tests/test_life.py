@@ -57,16 +57,6 @@ class Heartbeat(LifeHome):
         self.assertEqual(self.folder.record["exchange"], X)
         self.assertEqual(sorted(p.name for p in self.folder.path.iterdir()), ["control", "events.jsonl", "record.json"])
 
-    def test_after_the_recorded_end_the_watch_gets_progress_without_more_record_writes(self) -> None:
-        self.life.ended = True
-        before = (self.folder.path / "record.json").read_bytes()
-        self.clock.t += 3
-        with mock.patch.object(self.folder, "update", side_effect=PermissionError("Read-only after the end.")):
-            self.life.beat("database")
-        self.assertIsNone(self.life.error)
-        self.assertEqual(self.life.last_raised, self.clock.t)
-        self.assertEqual((self.folder.path / "record.json").read_bytes(), before)
-
     def test_a_watch_can_exist_before_the_exchange_has_a_folder(self) -> None:
         life = SignsOfLife(clock=self.clock)
         life.bind(self.folder)

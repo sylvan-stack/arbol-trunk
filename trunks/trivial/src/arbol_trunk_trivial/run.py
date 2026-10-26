@@ -95,7 +95,6 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     try:
         if events.error is None and life.error is None:
             write_end(events, folder, end)
-            life.ended = True  # the end is durable in the folder; later DB waits advertise no living Exchange
     except OSError as error:
         life.error = error
         end = folder_failed(error)

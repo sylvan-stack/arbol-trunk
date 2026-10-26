@@ -95,6 +95,7 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     try:
         if events.error is None and life.error is None:
             write_end(events, folder, end)
+            life.ended = True  # the end is durable in the folder; later DB waits advertise no living Exchange
     except OSError as error:
         life.error = error
         end = folder_failed(error)
@@ -103,7 +104,10 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     life.error = life.error or events.error
     saved = await life.wait(save_end(saver, folder.exchange, maker.at_end(), end), "database")
     if saved and events.error is None and life.error is None:
-        folder.remove()
+        try:
+            folder.remove()
+        except OSError:
+            pass  # the end already stands; settling can remove what cleanup left
     return end
 
 

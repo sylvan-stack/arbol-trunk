@@ -62,7 +62,8 @@ def replay(path: Path, exchange: str, accepted_at: datetime) -> Replay:
                     rows.extend(maker.take(n, event))
             elif isinstance(small, dict) and small.get("type") == "finished":
                 rows.extend(replace(row, kind="small", started=None)
-                            for row in RowMaker(exchange).take(0, small) if isinstance(row, RunRow))
+                            for row in RowMaker(exchange).take(line["n"] if type(line.get("n")) is int else 0, small)
+                            if isinstance(row, RunRow))
             elif isinstance(line.get("answer"), dict):
                 maker.take_answer(line["answer"])
             elif isinstance(line.get("end"), dict):

@@ -103,3 +103,33 @@ class ReplacingAMessage(ReplacementHome):
             self.accept(database, "--exchange", Y, "--replaces", X)
         self.assertEqual(json.loads(caught.exception.line), {**json.loads(new.line), "duplicate": True})
         self.assertEqual((database.exchanges, database.messages, database.runs), before)
+
+
+class ReplacementHistory(ReplacementHome):
+    def test_replacement_and_the_next_message_keep_earlier_history_but_none_of_the_replaced_exchange(self) -> None:
+        database = self.original()
+        second = self.accept(database, "--exchange", Y, "--chat", CHAT, "send this again")
+        second.folder.discard()
+        asyncio.run(second.connection.close())
+        database.exchanges[Y].state = "failed"
+        database.messages[(Y, 2)] = ("assistant", "the discarded answer")
+        database.tool_calls[(Y, 3)] = {"name": "shell", "input": {"command": "discard"}, "ok": True}
+        replacement = self.accept(database, "--exchange", Z, "--replaces", Y)
+        expected = [
+            {"type": "message", "role": "user", "text": "original message"},
+            {"type": "message", "role": "assistant", "text": "discard this answer"},
+            {"type": "tool_call", "name": "shell", "input": {"command": "old"}, "ok": True},
+        ]
+        self.assertEqual(replacement.history, expected)
+        replacement.folder.discard()
+        asyncio.run(replacement.connection.close())
+        database.exchanges[Z].state = "completed"
+        database.messages[(Z, 2)] = ("assistant", "new answer")
+        # Even a stale transcript left behind by an older writer must be excluded by replaced_by.
+        database.messages[(Y, 2)] = ("assistant", "stale discarded text")
+        database.tool_calls[(Y, 3)] = {"name": "shell", "input": {}, "ok": True}
+        next_exchange = self.accept(database, "--chat", CHAT, "next")
+        self.assertEqual(next_exchange.history, expected + [
+            {"type": "message", "role": "user", "text": "send this again"},
+            {"type": "message", "role": "assistant", "text": "new answer"}])
+        asyncio.run(next_exchange.connection.close())

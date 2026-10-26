@@ -122,6 +122,8 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         await run.wait()  # the process has ended; this waits for no pipe (gh-119710)
     finally:
         control.close()
+    if over.finished is None and not over.stopped and run.refusal is not None:
+        return failed("driver_failed", run.refusal)
     return end_of_run(over.finished, stopped=over.stopped)
 
 

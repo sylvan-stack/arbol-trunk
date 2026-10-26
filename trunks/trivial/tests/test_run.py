@@ -241,6 +241,24 @@ class WholeExchange(unittest.TestCase):
         self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["outcome"], "interrupted")
         self.assertTrue(self.database.tool_calls[(FIRST, 4)]["interrupted"])
 
+    def test_a_launchers_refusal_is_kept_in_the_failure_message(self) -> None:
+        refusal = """#!/bin/sh
+printf '%s\\n' '{"error":{"code":"build_unavailable","message":"No working Build of this Driver."}}'
+exit 1
+"""
+        for query_refused in (True, False):
+            with self.subTest(query_refused=query_refused):
+                self.database = FakeDatabase()
+                (self.bin / "arbol-claude-driver").write_text(
+                    refusal if query_refused else with_capabilities(refusal))
+                status, _lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+                self.assertEqual(status, 1)
+                error = self.database.exchanges[FIRST].error
+                self.assertEqual(error["code"], "driver_failed")
+                self.assertIn("build_unavailable", error["message"])
+                self.assertIn("No working Build of this Driver.", error["message"])
+                self.assertFalse((self.log / "starts").exists())
+
     def test_a_failed_run_keeps_the_drivers_error_whole(self) -> None:
         error = {"code": "rate_limited", "message": "…", "retryable": True, "retryAfterSeconds": 1800}
         self.events([PLAIN[0], {"runId": "RUN", "seq": 2, "type": "finished", "outcome": "failed", "error": error,

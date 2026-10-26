@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import shlex
 import sys
 import tempfile
 import time
@@ -26,7 +27,10 @@ class Capabilities(unittest.TestCase):
         self.program = self.home / "driver"
 
     def script(self, source: str) -> str:
-        self.program.write_text(f"#!{sys.executable}\n" + source)
+        script = self.program.with_suffix(".py")
+        script.write_text(source)
+        self.program.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -I -B "
+                                f"{shlex.quote(str(script))} \"$@\"\n")
         self.program.chmod(0o755)
         return str(self.program)
 

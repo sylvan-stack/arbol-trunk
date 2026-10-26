@@ -8,7 +8,8 @@ database the address names. The limit of a call is not divided by ARBOL_TEST_TIM
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -155,6 +156,20 @@ async def within_limit[T](call: Awaitable[T]) -> T:
         raise DatabaseUnavailable(str(error).strip() or type(error).__name__) from error
 
 
+@asynccontextmanager
+async def transaction(connection: psycopg.AsyncConnection[Any]) -> AsyncIterator[None]:
+    """Bound transaction commands too: BEGIN, SAVEPOINT, rollback and COMMIT can each lose the server."""
+    work = connection.transaction()
+    await within_limit(work.__aenter__())
+    try:
+        yield
+    except BaseException as error:
+        await within_limit(work.__aexit__(type(error), error, error.__traceback__))
+        raise
+    else:
+        await within_limit(work.__aexit__(None, None, None))
+
+
 BUSY = ("exchanges_one_open_per_chat", "exchanges_chat_id_number_key")
 
 HISTORY = """
@@ -180,7 +195,7 @@ class PostgresConnection:
         next number in its chat, the message at position 0, and the history of the chat (RCT-2, TRV-D3)."""
         a = acceptance
         try:
-            async with self.connection.transaction(), self.connection.cursor() as cursor:
+            async with transaction(self.connection), self.connection.cursor() as cursor:
                 await within_limit(cursor.execute(
                     "INSERT INTO chats (id, created_at) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                     (a.chat, a.accepted_at)))
@@ -261,7 +276,7 @@ class PostgresConnection:
                   error: dict[str, Any] | None, *, end_written: bool = True) -> None:
         """One transaction: the rows not yet saved, and the final state, changing the Exchange only while it is open
         (RCT-2.20)."""
-        async with self.connection.transaction(), self.connection.cursor() as cursor:
+        async with transaction(self.connection), self.connection.cursor() as cursor:
             await within_limit(cursor.execute("SELECT replaced_by FROM exchanges WHERE id = %s FOR UPDATE", (exchange,)))
             found = await cursor.fetchone()
             replaced = found is not None and found[0] is not None
@@ -270,7 +285,7 @@ class PostgresConnection:
                     continue
                 sql, params = row.statement()
                 try:
-                    async with self.connection.transaction():  # a refused row rolls back only its savepoint
+                    async with transaction(self.connection):  # a refused row rolls back only its savepoint
                         await within_limit(cursor.execute(sql, params))
                 except DatabaseUnavailable as refused:
                     if not permanent(refused):

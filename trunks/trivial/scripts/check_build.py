@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import subprocess
@@ -14,6 +15,70 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.build_support import COMPONENT, ENTRY, build_folder, digest, metadata, read_object, target  # noqa: E402
 from scripts.package_build import MUTABLE  # noqa: E402
+
+
+def program_policy(folder: Path, manifest: dict[str, Any]) -> None:
+    """Check the program's imports and identity without importing unchecked source (RCT-0)."""
+    source = folder / "src"
+    if {item.name for item in source.iterdir() if item.name != "__pycache__"} != {"arbol_trunk_trivial"}:
+        raise ValueError("The package must contain only the Trivial Trunk's source.")
+    if manifest.get("source", {}).get("componentPath") != "trunks/trivial":
+        raise ValueError("The source must come from trunks/trivial.")
+    description = read_object(folder / "arbol-build.json")
+    package = read_object(folder / "package.json")
+    if (description.get("component") != COMPONENT or description.get("entry") != ENTRY
+            or description.get("rootContracts") != [1]
+            or package.get("name") != "@sylvan-stack/arbol-trunk-trivial"
+            or package.get("repository", {}).get("directory") != "trunks/trivial"):
+        raise ValueError("The Build description must name this Trunk, its entry and Root Contracts.")
+    allowed = sys.stdlib_module_names | {"arbol_trunk_trivial", "psycopg"}
+    files = [*source.rglob("*.py"), folder / "bin/entry.py"]
+    for path in files:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            imports: list[str] = []
+            if isinstance(node, ast.Import):
+                imports = [name.name for name in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    if not path.is_relative_to(source / "arbol_trunk_trivial") or node.level != 1:
+                        raise ValueError(f"A relative import escapes this Trunk in {path.name}.")
+                    continue
+                imports = [node.module or ""]
+            for name in imports:
+                if name.split(".")[0] not in allowed:
+                    raise ValueError(f"The program imports {name}, outside the standard library and psycopg.")
+        if path.name in ("__init__.py", "root.py") and path.parent == source / "arbol_trunk_trivial":
+            constants = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
+                         if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                         and node.targets[0].id in {"NAME", "CODE_NAME", "ROOT_CONTRACTS"}}
+            if path.name == "__init__.py" and constants != {"NAME": COMPONENT, "CODE_NAME": "trivial"}:
+                raise ValueError("The program's component and code name differ from its Build.")
+            if path.name == "root.py" and list(constants.get("ROOT_CONTRACTS", ())) != description["rootContracts"]:
+                raise ValueError("The program's Root Contracts differ from its Build.")
+
+
+def runtime_probe(folder: Path) -> None:
+    """The package's isolated interpreter must load binary psycopg from its own site-packages."""
+    probe = '''import importlib, json, pathlib, platform, sys
+folder = pathlib.Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(folder / "src"))
+import psycopg, psycopg_binary
+for path in (folder / "src/arbol_trunk_trivial").glob("*.py"):
+    importlib.import_module("arbol_trunk_trivial" + ("." + path.stem if path.stem != "__init__" else ""))
+site = folder / "runtime/python/lib/python3.14/site-packages"
+for name, module in sys.modules.copy().items():
+    if name.split(".")[0] in {"psycopg", "psycopg_binary"}:
+        path = pathlib.Path(module.__file__).resolve()
+        if not path.is_relative_to(site):
+            raise ValueError("psycopg was loaded from outside the package")
+print(json.dumps({"python": platform.python_version(), "psycopg": psycopg.__version__, "implementation": psycopg.pq.__impl__}))
+'''
+    result = subprocess.run([str(folder / "runtime/python/bin/python3.14"), "-I", "-B", "-c", probe, str(folder)],
+                            cwd=folder, check=True, capture_output=True, text=True, timeout=30)
+    _version, pin, psycopg = metadata(folder)
+    if json.loads(result.stdout) != {"python": pin["version"], "psycopg": psycopg, "implementation": "binary"}:
+        raise ValueError("The runtime must load the pinned Python and binary psycopg from this package.")
 
 
 def verify(folder: Path, *, candidate: bool) -> dict[str, Any]:
@@ -90,6 +155,8 @@ def main() -> int:
         if args.mode == "metadata":
             print(json.dumps({"component": COMPONENT, "build": value["build"], "python": value["python"], "passed": True}))
             return 0
+        program_policy(folder, value)
+        runtime_probe(folder)
         status = unit(folder)
         verify(folder, candidate=args.candidate is not None)
         return status

@@ -7,7 +7,7 @@ from unittest import mock
 from package_fixtures import package_source
 
 from scripts.build_support import read_object
-from scripts.check_build import unit, verify
+from scripts.check_build import program_policy, unit, verify
 from scripts.package_build import package
 
 
@@ -53,3 +53,41 @@ class PackageChecks(unittest.TestCase):
         (empty / "tests").mkdir(parents=True)
         with self.assertRaisesRegex(ValueError, "no tests"):
             unit(empty)
+
+    def test_the_packaged_program_has_only_its_allowed_imports(self) -> None:
+        manifest = read_object(self.folder / "package-manifest.json")
+        program_policy(self.folder, manifest)
+        path = self.folder / "src/arbol_trunk_trivial/run.py"
+        path.write_text(path.read_text() + "\nimport requests\n")
+        with self.assertRaisesRegex(ValueError, "imports requests"):
+            program_policy(self.folder, manifest)
+
+    def test_source_from_another_trunk_is_refused(self) -> None:
+        manifest = read_object(self.folder / "package-manifest.json")
+        manifest["source"]["componentPath"] = "trunks/another"
+        with self.assertRaisesRegex(ValueError, "trunks/trivial"):
+            program_policy(self.folder, manifest)
+        manifest["source"]["componentPath"] = "trunks/trivial"
+        (self.folder / "src/another_trunk").mkdir()
+        with self.assertRaisesRegex(ValueError, "only the Trivial Trunk"):
+            program_policy(self.folder, manifest)
+
+    def test_a_different_program_identity_or_contract_version_is_refused(self) -> None:
+        manifest = read_object(self.folder / "package-manifest.json")
+        path = self.folder / "src/arbol_trunk_trivial/__init__.py"
+        original = path.read_text()
+        path.write_text(original.replace('CODE_NAME = "trivial"', 'CODE_NAME = "another"'))
+        with self.assertRaisesRegex(ValueError, "code name"):
+            program_policy(self.folder, manifest)
+        path.write_text(original)
+        path = self.folder / "src/arbol_trunk_trivial/root.py"
+        path.write_text(path.read_text().replace("ROOT_CONTRACTS = (1,)", "ROOT_CONTRACTS = (2,)"))
+        with self.assertRaisesRegex(ValueError, "Root Contracts"):
+            program_policy(self.folder, manifest)
+
+    def test_a_different_build_description_is_refused(self) -> None:
+        description = read_object(self.folder / "arbol-build.json")
+        description["rootContracts"] = [2]
+        (self.folder / "arbol-build.json").write_text(json.dumps(description))
+        with self.assertRaisesRegex(ValueError, "Build description"):
+            program_policy(self.folder, read_object(self.folder / "package-manifest.json"))

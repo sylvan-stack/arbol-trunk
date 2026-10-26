@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import tempfile
@@ -251,3 +252,17 @@ class SavingSettlement(SettlementTest):
         asyncio.run(blocked())
         self.assertTrue(self.folder.path.exists())
         self.assertEqual(self.database.connections, 0)
+
+    def test_an_unfinished_end_is_skipped_and_a_closed_failure_remains_unchanged(self) -> None:
+        stored = self.database.exchanges[X]
+        stored.state, stored.ended_at = "failed", AT
+        stored.error = {"code": "rate_limited", "message": "earlier failure", "retryAfterSeconds": 120}
+        before = copy.deepcopy(stored)
+        whole = {"n": 1, "event": {"type": "text", "runId": "run", "text": "whole", "at": AT.isoformat()}}
+        tail = {"n": 2, "end": {"state": "completed", "at": "2026-10-15T10:00:00Z"}}
+        (self.folder.path / "events.jsonl").write_bytes((json.dumps(whole) + "\n" + json.dumps(tail)).encode())
+        self.assertEqual(self.settle(), (0, {"exchange": X, "settled": "failed"}))
+        self.assertEqual(stored, before)
+        self.assertEqual(self.database.messages, {(X, 1): ("assistant", "whole")})
+        self.assertEqual(self.database.runs[(X, "run")]["outcome"], "interrupted")
+        self.assertEqual(self.database.runs[(X, "run")]["ended_at"], AT)

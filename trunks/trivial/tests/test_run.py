@@ -223,12 +223,15 @@ class WholeExchange(unittest.TestCase):
         self.assertEqual(record["end"], lines[-1]["end"])
 
     def test_a_driver_that_is_not_on_the_search_path_fails_the_exchange_with_driver_failed(self) -> None:
-        status, _lines = self.run_trunk("--exchange", FIRST, "--driver", "cluade", "hi")
-        self.assertEqual(status, 1)
-        error = self.database.exchanges[FIRST].error
-        self.assertEqual(error["code"], "driver_failed")
-        self.assertIn("arbol-cluade-driver", error["message"])
-        self.assertEqual(self.database.runs, {})
+        for driver in ("cluade", "some/path"):
+            with self.subTest(driver=driver):
+                self.database = FakeDatabase()
+                status, _lines = self.run_trunk("--exchange", FIRST, "--driver", driver, "hi")
+                self.assertEqual(status, 1)
+                error = self.database.exchanges[FIRST].error
+                self.assertEqual(error["code"], "driver_failed")
+                self.assertIn(f"arbol-{driver}-driver", error["message"])
+                self.assertEqual(self.database.runs, {})
 
     def test_a_driver_that_ends_without_finished_fails_it_and_its_run_is_interrupted(self) -> None:
         self.events(PLAIN[:4])

@@ -423,6 +423,35 @@ IFS= read -r line""")
         self.assertEqual(json.loads(lines[-1])["end"]["error"]["code"], "events_file_full")
         self.assertEqual(self.database.exchanges[FIRST].state, "failed")
 
+    def test_a_silent_run_is_stopped_and_the_exchange_fails_with_its_own_cause(self) -> None:
+        for cooperative in (True, False):
+            with self.subTest(cooperative=cooperative):
+                self.database = FakeDatabase()
+                script = """#!/bin/sh
+run=$(sed -n 's/.*"runId":"\\([^\"]*\\)".*/\\1/p' "$4")
+printf '%s\\n' '{"runId":"'"$run"'","seq":1,"type":"started"}'
+printf '%s\\n' '{"runId":"'"$run"'","seq":2,"type":"text","text":"Half an answer."}'
+printf '%s\\n' '{"runId":"'"$run"'","seq":3,"type":"usage","usage":{"inputTokens":2}}'
+IFS= read -r line
+printf '%s\\n' "$line" > "$STANDIN_LOG/control"
+"""
+                script += ("""printf '%s\\n' '{"runId":"'"$run"'","seq":4,"type":"finished","outcome":"cancelled"}'
+""" if cooperative else "exec /bin/sleep 30\n")
+                (self.bin / "arbol-claude-driver").write_text(with_capabilities(script))
+                began = time.monotonic()
+                with mock.patch("arbol_trunk_trivial.run.SILENCE_SECONDS", 3):
+                    status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+                self.assertLess(time.monotonic() - began, 4)
+                self.assertEqual(status, 1)
+                self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
+                self.assertEqual(self.database.exchanges[FIRST].error["code"], "driver_silent")
+                self.assertEqual(json.loads(lines[-1])["end"]["error"]["code"], "driver_silent")
+                run = self.database.runs[(FIRST, f"{FIRST}.1")]
+                self.assertEqual(run["outcome"], "cancelled" if cooperative else "interrupted")
+                self.assertEqual(run["usage"], {"inputTokens": 2})
+                self.assertEqual(self.database.messages[(FIRST, 2)], ("assistant", "Half an answer."))
+                self.assertEqual(os.listdir(self.root / "exchanges"), [])
+
     def test_a_whole_start_reads_no_settings_file_but_its_own(self) -> None:
         settings_file(self.home).parent.mkdir(parents=True)
         settings_file(self.home).write_text(json.dumps({"driver": "claude"}))

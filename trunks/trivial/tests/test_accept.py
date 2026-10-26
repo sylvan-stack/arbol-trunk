@@ -76,7 +76,7 @@ class Acceptances(unittest.TestCase):
 
 
 
-class AcceptingAMessage(unittest.TestCase):
+class AcceptanceHome(unittest.TestCase):
     def setUp(self) -> None:
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -98,6 +98,8 @@ class AcceptingAMessage(unittest.TestCase):
                                           process={"pid": 48213, "startedAt": "2026-10-15T09:30:00.000Z"},
                                           started=time.monotonic()))
 
+
+class AcceptingAMessage(AcceptanceHome):
     def test_the_acceptance_line_names_the_exchange_the_chat_its_number_the_trunk_and_the_build(self) -> None:
         exchange = self.accept(FakeDatabase(), "--exchange", "7f3a2c1e-4b5d-4e6f-8a9b-0c1d2e3f4a5b", "--chat", CHAT,
                                "What does build.sh do?")

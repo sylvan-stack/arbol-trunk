@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .accept import Exchange, accept_message
+from .accept import Exchange, Repeated, accept_message
 from .clock import UPTIME, Clock, scaled
 from .control import ControlFile
 from .database import Connect
@@ -44,6 +44,9 @@ async def run_exchange(prepared: Prepared, connect: Connect, *, build: str, proc
     output = output or Output()
     try:
         exchange = await accept_message(prepared, connect, build=build, process=process, started=started)
+    except Repeated as repeated:
+        output.line(repeated.line)
+        return 0
     except Refusal as refusal:
         output.line(refusal.line())
         return 1

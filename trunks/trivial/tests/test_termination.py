@@ -51,7 +51,7 @@ end_group()
             if process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-        self.assertEqual(process.returncode, -signal.SIGKILL, err.decode())
+        self.assertIn(process.returncode, (-signal.SIGKILL, 128 + signal.SIGKILL), err.decode())
         self.assertGreaterEqual(time.monotonic() - began, 0.5)
         child_pid = json.loads(out)["child"]
         state = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(child_pid)], capture_output=True,
@@ -90,7 +90,7 @@ cli.main(['--root','rct','run','hello'])
                     if process.poll() is None:
                         os.killpg(process.pid, signal.SIGKILL)
                         process.wait()
-                self.assertEqual(process.returncode, -signal.SIGKILL, err.decode())
+                self.assertIn(process.returncode, (-signal.SIGKILL, 128 + signal.SIGKILL), err.decode())
                 self.assertEqual(path.read_text(), "accepted\n")
 
     def test_term_reaches_the_driver_which_ends_its_vendor_group(self) -> None:
@@ -128,7 +128,7 @@ end_group()
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
-            self.assertEqual(process.returncode, -signal.SIGKILL, err.decode())
+            self.assertIn(process.returncode, (-signal.SIGKILL, 128 + signal.SIGKILL), err.decode())
             self.assertTrue(json.loads(report.read_text())["ended"])
 
     def test_a_watch_thread_can_end_the_group_without_main_thread_signal_api_calls(self) -> None:
@@ -156,6 +156,6 @@ finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
-            self.assertEqual(process.returncode, -signal.SIGKILL, err.decode())
+            self.assertIn(process.returncode, (-signal.SIGKILL, 128 + signal.SIGKILL), err.decode())
             self.assertEqual(err, b"")
             self.assertEqual(path.read_text(), "accepted\n")

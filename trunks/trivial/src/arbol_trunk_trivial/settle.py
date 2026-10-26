@@ -4,41 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .claim import root_lock
 from .database import Connect, Connection, DatabaseUnavailable, StoredExchange, conninfo, postgres
 from .end import End
 from .errors import Refusal
 from .folder import ExchangeFolder
 from .output import Output
-from .process import started_at
+from .process import process_alive as process_alive
 from .root import SECURITY, database_address, find_root, keychain_password, read_json, role
 from .rows import Row, RowMaker, RunRow, moment
 
 DATABASE_SECONDS = 10.0  # not divided by ARBOL_TEST_TIME_SCALE (RCT-4)
-
-
-def process_alive(process: Any) -> bool:
-    """The PID must still have the recorded start time, give or take two seconds (RCT-1)."""
-    if not isinstance(process, dict) or not isinstance(process.get("pid"), int) or isinstance(process["pid"], bool):
-        raise Refusal("trunk_failed", "The Exchange record names no process.")
-    try:
-        recorded = datetime.fromisoformat(process["startedAt"])
-        if recorded.tzinfo is None or process["pid"] <= 0:
-            raise ValueError("A process needs a positive PID and an absolute start time.")
-    except (KeyError, TypeError, ValueError):
-        raise Refusal("trunk_failed", "The Exchange record names no readable process start time.") from None
-    try:
-        actual = datetime.fromisoformat(started_at(process["pid"]))
-    except subprocess.CalledProcessError:
-        return False
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        raise Refusal("trunk_failed", "The recorded process could not be checked safely.") from None
-    return abs((actual - recorded).total_seconds()) <= 2
 
 
 @dataclass
@@ -98,7 +80,7 @@ def replay(path: Path, exchange: str, accepted_at: datetime) -> Replay:
 
 
 async def open_settlement(home: Path, root_id: str, exchange: str, *, security: str = SECURITY,
-                          connect: Connect | None = None) -> Settlement | None:
+                          connect: Connect | None = None, deadline: float | None = None) -> Settlement | None:
     """No folder or never accepted: remove what remains and return None. A living process or an unavailable
     database is refused with its folder intact. Otherwise return the folder and the connection for replay."""
     root = find_root(home, root_id)
@@ -119,7 +101,8 @@ async def open_settlement(home: Path, root_id: str, exchange: str, *, security: 
         if connect is None:
             address = database_address(home)
             connect = postgres(conninfo(address, root.database, keychain_password(role(address), security)))
-        async with asyncio.timeout(DATABASE_SECONDS):
+        deadline = deadline if deadline is not None else time.monotonic() + DATABASE_SECONDS
+        async with asyncio.timeout(max(deadline - time.monotonic(), 0)):
             connection = await connect()
             stored = await connection.exchange_state(exchange)
         if stored is None:
@@ -153,13 +136,50 @@ def final_end(record: dict[str, Any], found: Replay) -> End:
 
 async def settle_exchange(home: Path, root_id: str, exchange: str, *, output: Output,
                           security: str = SECURITY, connect: Connect | None = None) -> int:
-    pending = await open_settlement(home, root_id, exchange, security=security, connect=connect)
+    state = "none"
+    root = find_root(home, root_id)
+    if (root.exchanges / exchange).exists():
+        deadline = time.monotonic() + DATABASE_SECONDS
+        async with root_lock(root.exchanges, deadline):
+            if (root.exchanges / exchange).exists():
+                state = await _settle_locked(home, root_id, exchange, security=security, connect=connect,
+                                             deadline=deadline)
+            else:
+                # The folder existed before we waited: another settler removed it, so report its stored result.
+                state = await _stored_state(home, root_id, exchange, security=security, connect=connect,
+                                            deadline=deadline)
+    output.line(json.dumps({"exchange": exchange, "settled": state}, separators=(",", ":")))
+    return 0
+
+
+async def _stored_state(home: Path, root_id: str, exchange: str, *, security: str,
+                        connect: Connect | None, deadline: float) -> str:
+    connection: Connection | None = None
+    try:
+        if connect is None:
+            root = find_root(home, root_id)
+            address = database_address(home)
+            connect = postgres(conninfo(address, root.database, keychain_password(role(address), security)))
+        async with asyncio.timeout(max(deadline - time.monotonic(), 0)):
+            connection = await connect()
+            stored = await connection.exchange_state(exchange)
+        return stored.state if stored is not None else "none"
+    except (DatabaseUnavailable, TimeoutError):
+        raise Refusal("database_unavailable", "The database did not answer within 10 seconds.") from None
+    finally:
+        if connection is not None:
+            await connection.close()
+
+
+async def _settle_locked(home: Path, root_id: str, exchange: str, *, security: str,
+                         connect: Connect | None, deadline: float) -> str:
+    pending = await open_settlement(home, root_id, exchange, security=security, connect=connect, deadline=deadline)
     state = "none"
     if pending is not None:
         try:
             found = replay(pending.folder.path / "events.jsonl", exchange, pending.stored.accepted_at)
             end = final_end(pending.folder.record, found)
-            async with asyncio.timeout(DATABASE_SECONDS):
+            async with asyncio.timeout(max(deadline - time.monotonic(), 0)):
                 await pending.connection.end(exchange, found.rows, end.state, end.at, end.error)
                 stored = await pending.connection.exchange_state(exchange)
             state = stored.state if stored is not None else "none"
@@ -170,5 +190,4 @@ async def settle_exchange(home: Path, root_id: str, exchange: str, *, output: Ou
             raise Refusal("trunk_failed", "The Exchange folder could not be read or removed.") from None
         finally:
             await pending.connection.close()
-    output.line(json.dumps({"exchange": exchange, "settled": state}, separators=(",", ":")))
-    return 0
+    return state

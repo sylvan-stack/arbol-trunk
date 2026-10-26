@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import tempfile
@@ -10,6 +11,7 @@ from unittest import mock
 
 from fakes import Exchange, FakeDatabase
 
+from arbol_trunk_trivial.claim import root_lock
 from arbol_trunk_trivial.cli import start
 from arbol_trunk_trivial.command import parse
 from arbol_trunk_trivial.errors import Refusal
@@ -18,7 +20,7 @@ from arbol_trunk_trivial.output import Output
 from arbol_trunk_trivial.process import started_at
 from arbol_trunk_trivial.root import roots_folder
 from arbol_trunk_trivial.rows import MessageRow, RunRow, ToolCallRow
-from arbol_trunk_trivial.settle import Settlement, open_settlement, replay
+from arbol_trunk_trivial.settle import Settlement, open_settlement, replay, settle_exchange
 
 X = "7f3a2c1e-4b5d-4e6f-8a9b-0c1d2e3f4a5b"
 AT = datetime(2026, 10, 15, 9, 30, tzinfo=UTC)
@@ -202,6 +204,65 @@ class SavingSettlement(SettlementTest):
         self.assertEqual(status, 1)
         self.assertEqual(answer["error"]["code"], "database_unavailable")  # type: ignore[index]
         self.assertTrue(self.folder.path.exists())
+
         self.assertEqual(self.database.closed, 1)
         self.assertEqual(self.database.exchanges[X].state, "open")
         self.assertTrue(self.folder.path.exists())
+
+    def test_a_replaced_exchange_recovers_only_runs_and_keeps_its_ended_state(self) -> None:
+        stored = self.database.exchanges[X]
+        stored.state, stored.ended_at, stored.replaced_by = "completed", AT, "replacement"
+        lines = [
+            {"n": 1, "event": {"type": "started", "runId": "run", "at": AT.isoformat()}},
+            {"n": 2, "event": {"type": "text", "runId": "run", "text": "discarded"}},
+            {"n": 3, "event": {"type": "tool_started", "runId": "run", "callId": "call", "name": "shell",
+                                "input": {}, "at": AT.isoformat()}},
+            {"n": 4, "event": {"type": "usage", "runId": "run", "usage": {"inputTokens": 41},
+                                "at": AT.isoformat()}},
+        ]
+        (self.folder.path / "events.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+        self.assertEqual(self.settle(), (0, {"exchange": X, "settled": "completed"}))
+        self.assertEqual(self.database.messages, {})
+        self.assertEqual(self.database.tool_calls, {})
+        self.assertEqual(self.database.runs[(X, "run")]["usage"], {"inputTokens": 41})
+        self.assertEqual((stored.state, stored.ended_at, stored.replaced_by), ("completed", AT, "replacement"))
+
+    def test_two_settlers_both_return_the_stored_state_and_only_one_replays(self) -> None:
+        self.database.delay = 0.02
+        replies: list[list[str]] = [[], []]
+
+        async def together() -> list[int]:
+            return await asyncio.gather(*(settle_exchange(
+                self.home, "rct", X, output=Output(lines.append), connect=self.database.connect())
+                for lines in replies))
+
+        self.assertEqual(asyncio.run(together()), [0, 0])
+        self.assertEqual([json.loads(lines[0])["settled"] for lines in replies], ["interrupted", "interrupted"])
+        self.assertEqual(self.database.ends, 1)
+        self.assertEqual(self.database.connections, self.database.closed)
+        self.assertFalse(self.folder.path.exists())
+
+    def test_a_settle_waiting_for_coordination_keeps_the_folder_and_respects_its_budget(self) -> None:
+        async def blocked() -> None:
+            async with root_lock(self.exchanges, time.monotonic() + 1):
+                with (mock.patch("arbol_trunk_trivial.settle.DATABASE_SECONDS", 0.03),
+                      self.assertRaises(Refusal) as caught):
+                    await settle_exchange(self.home, "rct", X, output=Output(), connect=self.database.connect())
+                self.assertEqual(caught.exception.code, "database_unavailable")
+        asyncio.run(blocked())
+        self.assertTrue(self.folder.path.exists())
+        self.assertEqual(self.database.connections, 0)
+
+    def test_an_unfinished_end_is_skipped_and_a_closed_failure_remains_unchanged(self) -> None:
+        stored = self.database.exchanges[X]
+        stored.state, stored.ended_at = "failed", AT
+        stored.error = {"code": "rate_limited", "message": "earlier failure", "retryAfterSeconds": 120}
+        before = copy.deepcopy(stored)
+        whole = {"n": 1, "event": {"type": "text", "runId": "run", "text": "whole", "at": AT.isoformat()}}
+        tail = {"n": 2, "end": {"state": "completed", "at": "2026-10-15T10:00:00Z"}}
+        (self.folder.path / "events.jsonl").write_bytes((json.dumps(whole) + "\n" + json.dumps(tail)).encode())
+        self.assertEqual(self.settle(), (0, {"exchange": X, "settled": "failed"}))
+        self.assertEqual(stored, before)
+        self.assertEqual(self.database.messages, {(X, 1): ("assistant", "whole")})
+        self.assertEqual(self.database.runs[(X, "run")]["outcome"], "interrupted")
+        self.assertEqual(self.database.runs[(X, "run")]["ended_at"], AT)

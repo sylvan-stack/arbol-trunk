@@ -14,6 +14,8 @@ and its output has been read to the end, for at most one second after the proces
 
 from __future__ import annotations
 
+import os
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,11 +28,13 @@ from .driver import CapabilityError, CapabilityStopped, Driver, DriverRun, capab
 from .end import End, cancelled, end_of_run, failed, finish, write_end
 from .errors import Refusal
 from .events import EventsFile
+from .life import SignsOfLife
 from .output import Output as Output
 from .request import run_request, write_request
 from .rows import RowMaker
 from .saver import Saver
 from .start import Prepared
+from .watch import Watch
 
 ROUND_SECONDS = 1.0
 OUTPUT_AFTER_EXIT_SECONDS = 1.0
@@ -42,43 +46,53 @@ async def run_exchange(prepared: Prepared, connect: Connect, *, build: str, proc
     """Accepts the message, says so on standard output, and runs the Exchange to its end. The exit status is 0 for
     completed, 1 for failed or refused, 2 for cancelled (RCT-2)."""
     output = output or Output()
+    life = SignsOfLife()
+    watch = Watch(life)
+    watch.start()
     try:
-        exchange = await accept_message(prepared, connect, build=build, process=process, started=started)
-    except Repeated as repeated:
-        output.line(repeated.line)
-        return 0
-    except Refusal as refusal:
-        output.line(refusal.line())
-        return 1
-    output.line(exchange.line)
-    if prepared.handed.detach:
-        detach()
-        output.broken = True
-    end = await run_accepted(prepared, connect, exchange, search_path, output)
-    return end.exit_status
+        try:
+            exchange = await life.wait(accept_message(prepared, connect, build=build, process=process,
+                                                       started=started), "database")
+        except Repeated as repeated:
+            output.line(repeated.line)
+            return 0
+        except Refusal as refusal:
+            output.line(refusal.line())
+            return 1
+        life.bind(exchange.folder)
+        life.beat("database")
+        output.line(exchange.line)
+        if prepared.handed.detach:
+            detach()
+            output.broken = True
+        end = await run_accepted(prepared, connect, exchange, search_path, output, life=life)
+        return end.exit_status
+    finally:
+        watch.close()
 
 
 async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange, search_path: str | None,
-                       output: Output | None = None) -> End:
+                       output: Output | None = None, *, life: SignsOfLife | None = None) -> End:
     folder = exchange.folder
+    life = life or SignsOfLife(folder)
     events = EventsFile(folder.path / "events.jsonl", output)
     maker = RowMaker(folder.exchange)
     saver = Saver(connect, exchange.connection)
     saver.start()
     try:
-        end = await one_run(prepared, exchange, events, maker, saver, search_path)
+        end = await one_run(prepared, exchange, events, maker, saver, search_path, life)
     except Exception as error:  # a defect of the Trunk still ends the Exchange (RCT-2.9)
         end = failed("trunk_failed", f"The Trunk failed: {type(error).__name__}: {error}")
     try:
         write_end(events, folder, end)
     finally:
         events.close()
-    await finish(saver, folder, maker.at_end(), end)
+    await life.wait(finish(saver, folder, maker.at_end(), end), "database")
     return end
 
 
 async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, maker: RowMaker, saver: Saver,
-                  search_path: str | None) -> End:
+                  search_path: str | None, life: SignsOfLife) -> End:
     folder = exchange.folder
     launcher = find_launcher(prepared.driver, search_path)
     if launcher is None:
@@ -93,17 +107,17 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         if any(line.kind == "stop" for line in control.read()):  # read just before the run (RCT-2.7, TRV-0.1)
             return cancelled()
         try:
-            await capabilities(launcher, prepared.driver, prepared.handed.route.get("subscription"),
-                               prepared.handed.working_folder, prepared.root.folder.parents[4],
-                               lambda: any(line.kind == "stop" for line in control.read()))
-            run = await DriverRun.start(launcher, request_file, prepared.handed.working_folder)
+            await life.wait(capabilities(launcher, prepared.driver, prepared.handed.route.get("subscription"),
+                                         prepared.handed.working_folder, prepared.root.folder.parents[4],
+                                         lambda: any(line.kind == "stop" for line in control.read())), "driver")
+            run = await life.wait(DriverRun.start(launcher, request_file, prepared.handed.working_folder), "driver")
         except CapabilityStopped:
             return cancelled()
         except CapabilityError as error:
             return failed("driver_failed", str(error))
         except OSError as error:
             return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
-        over = await drive(run, events, maker, saver, control)
+        over = await drive(run, events, maker, saver, control, life=life)
         run.close_control()
         await run.wait()  # the process has ended; this waits for no pipe (gh-119710)
     finally:
@@ -121,7 +135,7 @@ class RunOver:
 
 
 async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, control: ControlFile | None = None,
-                clock: Clock = UPTIME) -> RunOver:
+                clock: Clock = UPTIME, life: SignsOfLife | None = None) -> RunOver:
     """The rounds of the loop for one run, until the run is over: its Driver's process has ended and its output has
     been read to the end, for at most one second after the process ended (TRV-0, "Stopping the run"). Each round waits
     at most one second for output, appends what arrived, and hands each new `stop` and `answer` line of `control`
@@ -134,6 +148,7 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
     stopped_at: float | None = None
     finished_at: float | None = None
     killed = False
+    first_event = True
 
     def kill_time() -> float | None:
         first = min((at for at in (stopped_at, finished_at) if at is not None), default=None)
@@ -148,7 +163,13 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
             wait = min(wait, max(kill_at - clock.now(), 0.0))
         for line in await run.read(wait):
             n = events.append_event(line)
+            if first_event:
+                first_event = False
+                if os.environ.get("ARBOL_TEST_HANG") == "1":
+                    threading.Event().wait()  # stop this work thread; only the independent watch can act
             saver.add(maker.take(n, line.event))
+            if life is not None:
+                life.observe(line.event)
             if line.event.get("type") == "finished" and finished is None:
                 finished, finished_at = line.event, clock.now()
         for handed in control.read() if control is not None else []:
@@ -163,6 +184,8 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
         if kill_at is not None and run.returncode is None and clock.now() >= kill_at:
             run.kill()
             killed = True
+        if life is not None:
+            life.beat(life.waiting(driver=True))
         if run.returncode is not None:
             if run.output_ended:
                 break

@@ -21,6 +21,8 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
+from .storage import stored
+
 INTERRUPTED_CALL = "The Exchange ended before the tool call finished."
 
 Statement = tuple[str, tuple[Any, ...]]
@@ -48,7 +50,7 @@ class MessageRow:
 
     def statement(self) -> Statement:
         return ("INSERT INTO messages (exchange_id, position, role, text) VALUES (%s, %s, 'assistant', %s)"
-                " ON CONFLICT DO NOTHING", (self.exchange, self.position, self.text))
+                " ON CONFLICT DO NOTHING", stored((self.exchange, self.position, self.text)))
 
 
 @dataclass(frozen=True)
@@ -72,9 +74,9 @@ class ToolCallRow:
         return ("INSERT INTO tool_calls (exchange_id, position, run_id, call_id, parent_call_id, name, input, ok,"
                 " result, error, truncated, interrupted, ask, answer)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (self.exchange, self.position, self.run_id, self.call_id, self.parent_call_id, self.name,
+                stored((self.exchange, self.position, self.run_id, self.call_id, self.parent_call_id, self.name,
                  Jsonb(self.input), self.ok, jsonb(self.result), self.error, self.truncated, self.interrupted,
-                 jsonb(self.ask), jsonb(self.answer)))
+                 jsonb(self.ask), jsonb(self.answer))))
 
 
 @dataclass(frozen=True)
@@ -91,8 +93,8 @@ class RunRow:
     def statement(self) -> Statement:
         return ("INSERT INTO runs (exchange_id, run_id, kind, outcome, usage, error, started, ended_at)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (self.exchange, self.run_id, self.kind, self.outcome, Jsonb(self.usage), jsonb(self.error),
-                 jsonb(self.started), self.ended_at))
+                stored((self.exchange, self.run_id, self.kind, self.outcome, Jsonb(self.usage), jsonb(self.error),
+                 jsonb(self.started), self.ended_at)))
 
 
 Row = MessageRow | ToolCallRow | RunRow

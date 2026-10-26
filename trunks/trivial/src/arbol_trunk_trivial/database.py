@@ -21,6 +21,7 @@ from psycopg.types.json import Jsonb
 from . import NAME
 from .history import HistoryRow
 from .rows import Row, RunRow, jsonb
+from .storage import stored
 
 CALL_SECONDS = 5.0
 
@@ -187,12 +188,12 @@ class PostgresConnection:
                 await within_limit(cursor.execute(
                     "INSERT INTO exchanges (id, chat_id, number, state, trunk, build, route, small_call_route,"
                     " working_folder, accepted_at) VALUES (%s, %s, %s, 'open', %s, %s, %s, %s, %s, %s)",
-                    (a.exchange, a.chat, number, a.trunk, a.build, Jsonb(a.route),
+                    stored((a.exchange, a.chat, number, a.trunk, a.build, Jsonb(a.route),
                      None if a.small_call_route is None else Jsonb(a.small_call_route), a.working_folder,
-                     a.accepted_at)))
+                     a.accepted_at))))
                 await within_limit(cursor.execute(
                     "INSERT INTO messages (exchange_id, position, role, text) VALUES (%s, 0, 'user', %s)",
-                    (a.exchange, message)))
+                    stored((a.exchange, message))))
                 if a.replaces is not None:
                     await within_limit(cursor.execute("UPDATE exchanges SET replaced_by = %s WHERE id = %s",
                                                       (a.exchange, a.replaces)))
@@ -253,7 +254,7 @@ class PostgresConnection:
                 await within_limit(cursor.execute(sql, params))
             await within_limit(cursor.execute(
                 "UPDATE exchanges SET state = %s, ended_at = %s, error = %s WHERE id = %s AND state = 'open'",
-                (state, ended_at, jsonb(error), exchange)))
+                stored((state, ended_at, jsonb(error), exchange))))
 
     async def open_exchange(self, chat: str) -> str | None:
         try:

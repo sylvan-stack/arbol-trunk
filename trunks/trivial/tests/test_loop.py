@@ -92,6 +92,66 @@ class Loop(LoopTest):
 STOP = '{"type":"stop"}'
 
 
+class SilentRuns(LoopTest):
+    def test_sixteen_minutes_without_a_first_event_uses_the_awake_clock_and_the_scaled_duration(self) -> None:
+        for scale, expected in (("1", 960), ("10", 96)):
+            with self.subTest(scale=scale):
+                self.clock = MovedClock()
+                self.driver = ScriptedDriver(self.clock)
+                with mock.patch.dict("os.environ", {"ARBOL_TEST_TIME_SCALE": scale}):
+                    over = self.drive()
+                self.assertTrue(over.silent)
+                self.assertTrue(over.stopped)
+                self.assertAlmostEqual(self.driver.control[0][0], expected)
+                self.assertEqual(self.driver.control[0][1], STOP)
+                self.assertAlmostEqual(self.driver.killed_at or 0, expected + 16 / int(scale))
+
+    def test_every_event_resets_silence_even_when_its_tool_output_is_omitted(self) -> None:
+        self.events.tool_bytes[("x.1", "c")] = 1024 * 1024 + 1
+        self.driver.at(0, "event", event(1, "started"))
+        self.driver.at(900, "event", event(2, "tool_output_delta", callId="c", text="still alive"))
+        self.driver.at(1859, "event", finished(3))
+        self.driver.at(1860, "exit", 0)
+        over = self.drive()
+        self.assertFalse(over.silent)
+        self.assertEqual(self.driver.control, [])
+        self.assertEqual([line["event"]["type"] for line in self.lines()], ["started", "finished"])
+
+    def test_an_open_tool_or_question_can_wait_for_hours_without_counting_as_silence(self) -> None:
+        self.driver.at(0, "event", event(1, "started"))
+        self.driver.at(1, "event", event(2, "tool_started", callId="c", name="shell", input={}))
+        self.driver.at(7201, "event", event(3, "tool_finished", callId="c", ok=True))
+        self.driver.at(7202, "event", event(4, "ask_opened", askId="q", ask={"callId": "a"}))
+        self.driver.at(14402, "event", event(5, "ask_closed", askId="q"))
+        self.driver.at(14403, "event", finished(6))
+        self.driver.at(14404, "exit", 0)
+        over = self.drive()
+        self.assertFalse(over.silent)
+        self.assertEqual(self.driver.control, [])
+        self.assertEqual(self.clock.since_start(), 14404)
+
+    def test_a_mac_asleep_for_an_hour_does_not_add_an_hour_to_silence(self) -> None:
+        class SleepingDriver(ScriptedDriver):
+            asleep = True
+            wall_sleep = 0
+
+            async def read(self, seconds: float) -> list[Any]:
+                if self.asleep:
+                    self.asleep = False
+                    self.wall_sleep += 3600  # the test's awake clock stands still for the simulated sleep
+                    return []
+                return await super().read(seconds)
+
+        driver = SleepingDriver(self.clock)
+        self.driver = driver
+        with mock.patch("time.time", side_effect=lambda: self.clock.now() + driver.wall_sleep):
+            over = self.drive()
+        self.assertTrue(over.silent)
+        self.assertEqual(driver.wall_sleep, 3600)
+        self.assertEqual(driver.control, [(960, STOP)])
+        self.assertEqual(driver.killed_at, 976)
+
+
 class StoppingTheRun(LoopTest):
     """TRV-0.11: a stop line on the control input, and SIGKILL for a Driver still alive 16 seconds after it."""
 

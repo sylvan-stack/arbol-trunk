@@ -38,6 +38,7 @@ from .watch import Watch
 
 ROUND_SECONDS = 1.0
 OUTPUT_AFTER_EXIT_SECONDS = 1.0
+SILENCE_SECONDS = 16 * 60.0
 STOP_SECONDS = 16.0  # from the stop line, or the run's finished, to SIGKILL; a Driver has 15 for a stop (TRV-D8)
 
 
@@ -157,6 +158,8 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
         return folder_failed(events.error or life.error)
     if events.full:
         return file_full()
+    if over.silent:
+        return failed("driver_silent", "The Driver gave no event for 16 minutes with no tool call or question open.")
     if saver.rejected is not None:
         return failed("trunk_failed", str(saver.rejected))
     if over.finished is None and not over.stopped and run.refusal is not None:
@@ -171,6 +174,7 @@ class RunOver:
 
     finished: dict[str, Any] | None
     stopped: bool = False
+    silent: bool = False
 
 
 async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, control: ControlFile | None = None,
@@ -188,6 +192,14 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
     finished_at: float | None = None
     killed = False
     first_event = True
+    last_event = clock.now()
+    silent = False
+    life = life or SignsOfLife(clock=clock)
+
+    def idle_time() -> float | None:
+        if life.tools or life.questions or finished_at is not None or stopped_at is not None:
+            return None
+        return last_event + scaled(SILENCE_SECONDS)
 
     def kill_time() -> float | None:
         first = min((at for at in (stopped_at, finished_at) if at is not None), default=None)
@@ -197,10 +209,14 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
         wait = scaled(ROUND_SECONDS)
         if exited_at is not None:
             wait = min(wait, max(exited_at + scaled(OUTPUT_AFTER_EXIT_SECONDS) - clock.now(), 0.0))
+        idle_at = idle_time()
+        if idle_at is not None and run.returncode is None:
+            wait = min(wait, max(idle_at - clock.now(), 0.0))
         kill_at = kill_time()
         if kill_at is not None and run.returncode is None:
             wait = min(wait, max(kill_at - clock.now(), 0.0))
         for line in await run.read(wait):
+            last_event = clock.now()  # even an output fragment omitted by a size limit is an event
             try:
                 n = events.append_event(line)
             except OSError:
@@ -211,8 +227,7 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
                     threading.Event().wait()  # stop this work thread; only the independent watch can act
             if n is not None:
                 saver.add(maker.take(n, line.event))
-            if life is not None:
-                life.observe(line.event)
+            life.observe(line.event)
             if line.event.get("type") == "finished" and finished is None:
                 finished, finished_at = line.event, clock.now()
         try:
@@ -232,11 +247,13 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
                     saver.add(maker.take_answer(handed.value))
             elif stopped_at is None:
                 stopped_at = clock.now()
-        if life is not None:
-            life.error = life.error or events.error
-            life.beat(life.waiting(driver=True))
+        life.error = life.error or events.error
+        life.beat(life.waiting(driver=True))
+        idle_at = idle_time()
+        if idle_at is not None and run.returncode is None and clock.now() >= idle_at:
+            silent = True
         if stopped_at is None and (events.error is not None or events.full or saver.rejected is not None
-                                   or (life is not None and life.error is not None)):
+                                   or life.error is not None or silent):
             run.write_control('{"type":"stop"}')
             stopped_at = clock.now()
         kill_at = kill_time()
@@ -249,4 +266,4 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
             exited_at = clock.now() if exited_at is None else exited_at
             if clock.now() >= exited_at + scaled(OUTPUT_AFTER_EXIT_SECONDS):
                 break
-    return RunOver(finished, stopped_at is not None)
+    return RunOver(finished, stopped_at is not None, silent)

@@ -10,6 +10,7 @@ from unittest import mock
 
 from fakes import Exchange, FakeDatabase
 
+from arbol_trunk_trivial.claim import root_lock
 from arbol_trunk_trivial.cli import start
 from arbol_trunk_trivial.command import parse
 from arbol_trunk_trivial.errors import Refusal
@@ -18,7 +19,7 @@ from arbol_trunk_trivial.output import Output
 from arbol_trunk_trivial.process import started_at
 from arbol_trunk_trivial.root import roots_folder
 from arbol_trunk_trivial.rows import MessageRow, RunRow, ToolCallRow
-from arbol_trunk_trivial.settle import Settlement, open_settlement, replay
+from arbol_trunk_trivial.settle import Settlement, open_settlement, replay, settle_exchange
 
 X = "7f3a2c1e-4b5d-4e6f-8a9b-0c1d2e3f4a5b"
 AT = datetime(2026, 10, 15, 9, 30, tzinfo=UTC)
@@ -224,3 +225,29 @@ class SavingSettlement(SettlementTest):
         self.assertEqual(self.database.tool_calls, {})
         self.assertEqual(self.database.runs[(X, "run")]["usage"], {"inputTokens": 41})
         self.assertEqual((stored.state, stored.ended_at, stored.replaced_by), ("completed", AT, "replacement"))
+
+    def test_two_settlers_both_return_the_stored_state_and_only_one_replays(self) -> None:
+        self.database.delay = 0.02
+        replies: list[list[str]] = [[], []]
+
+        async def together() -> list[int]:
+            return await asyncio.gather(*(settle_exchange(
+                self.home, "rct", X, output=Output(lines.append), connect=self.database.connect())
+                for lines in replies))
+
+        self.assertEqual(asyncio.run(together()), [0, 0])
+        self.assertEqual([json.loads(lines[0])["settled"] for lines in replies], ["interrupted", "interrupted"])
+        self.assertEqual(self.database.ends, 1)
+        self.assertEqual(self.database.connections, self.database.closed)
+        self.assertFalse(self.folder.path.exists())
+
+    def test_a_settle_waiting_for_coordination_keeps_the_folder_and_respects_its_budget(self) -> None:
+        async def blocked() -> None:
+            async with root_lock(self.exchanges, time.monotonic() + 1):
+                with (mock.patch("arbol_trunk_trivial.settle.DATABASE_SECONDS", 0.03),
+                      self.assertRaises(Refusal) as caught):
+                    await settle_exchange(self.home, "rct", X, output=Output(), connect=self.database.connect())
+                self.assertEqual(caught.exception.code, "database_unavailable")
+        asyncio.run(blocked())
+        self.assertTrue(self.folder.path.exists())
+        self.assertEqual(self.database.connections, 0)

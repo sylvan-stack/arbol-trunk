@@ -2,13 +2,16 @@ import asyncio
 import copy
 import json
 import os
+import subprocess
+import sys
 import time
 from unittest import mock
 
 from fakes import FakeConnection, FakeDatabase
 from test_accept import CHAT, AcceptanceHome
 
-from arbol_trunk_trivial.accept import Repeated
+from arbol_trunk_trivial.accept import Exchange, Repeated, accept_message
+from arbol_trunk_trivial.claim import root_lock
 from arbol_trunk_trivial.database import Acceptance, Accepted, DuplicateExchange, PriorExchange
 from arbol_trunk_trivial.errors import Refusal
 from arbol_trunk_trivial.folder import ExchangeFolder
@@ -91,3 +94,68 @@ class Repeats(AcceptanceHome):
             self.accept(FakeDatabase(), "--exchange", X, "hello")
         self.assertEqual(caught.exception.code, "in_progress")
         self.assertTrue(folder.path.exists())
+
+    def test_two_starts_of_one_identifier_leave_only_the_winners_folder_and_acceptance(self) -> None:
+        async def race() -> None:
+            database = FakeDatabase()
+            accepting, release = asyncio.Event(), asyncio.Event()
+            original = FakeConnection.accept
+            calls = 0
+
+            async def held(connection: FakeConnection, value: Acceptance) -> Accepted:
+                nonlocal calls
+                calls += 1
+                accepting.set()
+                await release.wait()
+                return await original(connection, value)
+
+            async def start(message: str) -> Exchange:
+                return await accept_message(self.prepared("--driver", "claude", "--exchange", X, message),
+                                            database.connect(), build="0",
+                                            process={"pid": os.getpid(), "startedAt": started_at()},
+                                            started=time.monotonic())
+
+            with mock.patch.object(FakeConnection, "accept", held):
+                first = asyncio.create_task(start("winner"))
+                try:
+                    await asyncio.wait_for(accepting.wait(), 2)
+                    before = (self.exchanges / X / "record.json").read_bytes()
+                    with self.assertRaises(Refusal) as caught:
+                        await start("loser")
+                    self.assertEqual(caught.exception.code, "in_progress")
+                    self.assertEqual((self.exchanges / X / "record.json").read_bytes(), before)
+                    self.assertEqual(database.exchanges, {})
+                finally:
+                    release.set()
+                    winner = await first
+            self.assertEqual(calls, 1)
+            self.assertEqual(list(database.exchanges), [X])
+            self.assertEqual(database.messages[(X, 0)], ("user", "winner"))
+            self.assertEqual(sorted(p.name for p in self.exchanges.iterdir()), [X])
+            await winner.connection.close()
+        asyncio.run(race())
+
+    def test_another_process_cannot_claim_while_the_root_is_locked_and_its_wait_is_bounded(self) -> None:
+        code = """
+import asyncio,sys,time
+from pathlib import Path
+from arbol_trunk_trivial.claim import claim_folder
+from arbol_trunk_trivial.errors import Refusal
+async def main():
+    try:
+        await claim_folder(Path(sys.argv[1]), sys.argv[2], {}, time.monotonic()+0.05)
+    except Refusal as error:
+        print(error.code)
+    else:
+        print("claimed")
+asyncio.run(main())
+"""
+        async def check() -> None:
+            async with root_lock(self.exchanges, time.monotonic() + 1):
+                result = await asyncio.to_thread(subprocess.run, [sys.executable, "-B", "-c", code,
+                                                                  str(self.exchanges), X],
+                                                  capture_output=True, text=True, timeout=5, check=True)
+                self.assertEqual(result.stdout.strip(), "database_unavailable")
+                self.assertEqual(list(self.exchanges.iterdir()), [])
+        asyncio.run(check())
+        self.accept(FakeDatabase(), "--exchange", X, "after release")

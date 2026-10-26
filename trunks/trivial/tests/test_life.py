@@ -3,11 +3,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from fake_driver import MovedClock
 
 from arbol_trunk_trivial.folder import ExchangeFolder
-from arbol_trunk_trivial.life import SignsOfLife
+from arbol_trunk_trivial.life import SignsOfLife, waiting_for
 
 X = "7f3a2c1e-4b5d-4e6f-8a9b-0c1d2e3f4a5b"
 AT = "2026-10-26T11:00:00.000Z"
@@ -55,3 +56,39 @@ class Heartbeat(LifeHome):
         life.beat()
         self.assertEqual(life.heartbeat, 1)
         self.assertEqual(self.folder.record["signsOfLife"]["heartbeat"], 1)
+
+
+class Waiting(LifeHome):
+    def test_the_first_true_wait_in_the_contracts_order_wins(self) -> None:
+        cases = [({}, "database"), ({"small_call": True}, "small-call"), ({"driver": True}, "driver"),
+                 ({"tool": True}, "tool"), ({"answer": True}, "answer"),
+                 ({"driver": True, "small_call": True}, "driver"),
+                 ({"tool": True, "driver": True, "small_call": True}, "tool"),
+                 ({"answer": True, "tool": True, "driver": True, "small_call": True}, "answer")]
+        for flags, expected in cases:
+            with self.subTest(flags=flags):
+                self.assertEqual(waiting_for(**flags), expected)
+
+    def test_since_changes_only_when_the_wait_changes(self) -> None:
+        with mock.patch("arbol_trunk_trivial.life.iso", return_value="2026-10-26T11:01:00.000Z"):
+            self.life.beat("driver")
+        with mock.patch("arbol_trunk_trivial.life.iso", return_value="2026-10-26T11:02:00.000Z"):
+            self.life.beat("driver")
+            self.assertEqual(self.folder.record["signsOfLife"]["since"], "2026-10-26T11:01:00.000Z")
+            self.life.beat("tool")
+        self.assertEqual(self.folder.record["signsOfLife"], {
+            "heartbeat": 3, "waitingFor": "tool", "since": "2026-10-26T11:02:00.000Z"})
+
+    def test_questions_and_calls_follow_their_events_until_they_close(self) -> None:
+        events = [
+            ({"type": "tool_started", "callId": "call"}, "tool"),
+            ({"type": "ask_opened", "askId": "question"}, "answer"),
+            ({"type": "text", "text": "still waiting"}, "answer"),
+            ({"type": "ask_closed", "askId": "question"}, "tool"),
+            ({"type": "tool_finished", "callId": "call"}, "driver"),
+            ({"type": "tool_started", "callId": "cut-off"}, "tool"),
+            ({"type": "finished"}, "driver")]
+        for event, expected in events:
+            self.life.observe({"runId": "run", **event})
+            self.assertEqual(self.life.waiting(driver=True), expected)
+        self.assertEqual(self.life.waiting(), "database")

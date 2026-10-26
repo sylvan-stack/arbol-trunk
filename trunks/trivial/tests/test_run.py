@@ -17,6 +17,8 @@ from fakes import FakeDatabase
 from stand_ins import security_stand_in, with_capabilities
 
 from arbol_trunk_trivial.command import handed, parse
+from arbol_trunk_trivial.events import EventsFile
+from arbol_trunk_trivial.folder import ExchangeFolder
 from arbol_trunk_trivial.root import roots_folder
 from arbol_trunk_trivial.run import Output, run_exchange
 from arbol_trunk_trivial.settings import settings_file
@@ -322,6 +324,53 @@ exit 1
         self.assertEqual((call["name"], call["ok"], call["interrupted"]), ("shell", False, True))
         self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["outcome"], "cancelled")
         self.assertEqual(os.listdir(self.root / "exchanges"), [])
+
+    def test_a_failed_events_write_stops_the_driver_saves_held_rows_and_leaves_the_folder(self) -> None:
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(STOPPABLE))
+        append = EventsFile._append
+
+        def fail(file: EventsFile, data: bytes) -> None:
+            if file.error is None and b'tool_started' in data:
+                file.error = PermissionError("The file became read-only.")
+                raise file.error
+            append(file, data)
+
+        with mock.patch.object(EventsFile, "_append", fail):
+            status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "folder_unwritable")
+        self.assertTrue(self.database.tool_calls[(FIRST, 2)]["interrupted"])
+        self.assertEqual(self.database.runs[(FIRST, f"{FIRST}.1")]["outcome"], "cancelled")
+        folder = self.root / "exchanges" / FIRST
+        self.assertEqual(len((folder / "events.jsonl").read_text().splitlines()), 1)
+        self.assertNotIn("end", json.loads((folder / "record.json").read_text()))
+        self.assertFalse(any('"end"' in line for line in lines))
+
+    def test_a_failed_heartbeat_stops_the_driver_and_preserves_rows_already_held(self) -> None:
+        (self.bin / "arbol-claude-driver").write_text(with_capabilities(STOPPABLE))
+        update = ExchangeFolder.update
+
+        def fail(folder: ExchangeFolder, **fields: Any) -> None:
+            if (folder.path / "events.jsonl").stat().st_size > 0:
+                raise PermissionError("The folder became read-only.")
+            update(folder, **fields)
+
+        with mock.patch.object(ExchangeFolder, "update", fail):
+            status, _ = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "folder_unwritable")
+        self.assertTrue(self.database.tool_calls[(FIRST, 2)]["interrupted"])
+        self.assertTrue((self.root / "exchanges" / FIRST).is_dir())
+
+    def test_a_failed_request_write_never_starts_a_driver_and_ends_directly_in_the_database(self) -> None:
+        with mock.patch("arbol_trunk_trivial.run.write_request", side_effect=PermissionError("No write access.")):
+            status, _ = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertFalse((self.log / "starts").exists())
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "folder_unwritable")
+        self.assertTrue((self.root / "exchanges" / FIRST).is_dir())
 
     def test_a_whole_start_reads_no_settings_file_but_its_own(self) -> None:
         settings_file(self.home).parent.mkdir(parents=True)

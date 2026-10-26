@@ -36,6 +36,15 @@ class TimeScaledWaits(LifeHome):
             observed['Driver stop after finished'] = driver.killed_at
             observed['output after process exit'] = self.clock.since_start() - driver.killed_at
 
+            silent_clock = MovedClock()
+            silent = ScriptedDriver(silent_clock)
+            silent_events = EventsFile(self.folder.path / 'events.jsonl')
+            try:
+                await drive(silent, silent_events, RowMaker('x'), Saver(FakeDatabase().connect()), clock=silent_clock)
+            finally:
+                silent_events.close()
+            observed['Driver silence'] = silent.control[0][0]
+
             original_wait = asyncio.wait
             async def immediate() -> int:
                 return 42
@@ -94,7 +103,7 @@ class TimeScaledWaits(LifeHome):
 
         expected = {'driver round': 0.1, 'Driver stop after finished': 1.6, 'output after process exit': 0.1,
                     'startup/save work poll': 0.1, 'saving retry': 0.5, 'end retry': 0.5, 'end tries': 6.0,
-                    'watch age': 6.0, 'watch look': 0.1, 'group grace': 0.5}
+                    'watch age': 6.0, 'watch look': 0.1, 'group grace': 0.5, 'Driver silence': 96.0}
         self.assertEqual(set(observed), set(expected))
         for name, value in expected.items():
             with self.subTest(wait=name):

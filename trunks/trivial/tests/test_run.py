@@ -398,6 +398,60 @@ IFS= read -r line""")
         self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
         self.assertEqual(os.listdir(self.root / "exchanges"), [])
 
+    def test_a_full_file_fails_the_exchange_and_keeps_only_rows_from_written_lines(self) -> None:
+        with mock.patch("arbol_trunk_trivial.events.FILE_BYTES", 500):
+            status, raw = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        lines = [json.loads(line) for line in raw[1:]]
+        self.assertEqual(status, 1)
+        self.assertEqual(lines[-1]["end"]["error"]["code"], "events_file_full")
+        self.assertEqual(self.database.exchanges[FIRST].error["code"], "events_file_full")
+        self.assertEqual([line["n"] for line in lines], list(range(1, len(lines) + 1)))
+        written = {line["n"] for line in lines if line.get("event", {}).get("type") == "tool_started"}
+        self.assertTrue({position for exchange, position in self.database.tool_calls if exchange == FIRST} <= written)
+        self.assertEqual(self.database.messages, {(FIRST, 0): ("user", "hi"), **{
+            (FIRST, line["n"]): ("assistant", line["event"]["text"]) for line in lines
+            if line.get("event", {}).get("type") == "text"}})
+        self.assertEqual(os.listdir(self.root / "exchanges"), [])
+
+    def test_an_end_that_is_the_first_line_past_the_limit_is_itself_failed(self) -> None:
+        event = {"type": "finished", "runId": "RUN", "seq": 1, "outcome": "completed"}
+        self.events([event])
+        written = '{"n":1,"event":' + json.dumps({**event, "runId": f"{FIRST}.1"}) + '}\n'
+        with mock.patch("arbol_trunk_trivial.events.FILE_BYTES", len(written.encode()) + 1):
+            status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+        self.assertEqual(status, 1)
+        self.assertEqual(json.loads(lines[-1])["end"]["error"]["code"], "events_file_full")
+        self.assertEqual(self.database.exchanges[FIRST].state, "failed")
+
+    def test_a_silent_run_is_stopped_and_the_exchange_fails_with_its_own_cause(self) -> None:
+        for cooperative in (True, False):
+            with self.subTest(cooperative=cooperative):
+                self.database = FakeDatabase()
+                script = """#!/bin/sh
+run=$(sed -n 's/.*"runId":"\\([^\"]*\\)".*/\\1/p' "$4")
+printf '%s\\n' '{"runId":"'"$run"'","seq":1,"type":"started"}'
+printf '%s\\n' '{"runId":"'"$run"'","seq":2,"type":"text","text":"Half an answer."}'
+printf '%s\\n' '{"runId":"'"$run"'","seq":3,"type":"usage","usage":{"inputTokens":2}}'
+IFS= read -r line
+printf '%s\\n' "$line" > "$STANDIN_LOG/control"
+"""
+                script += ("""printf '%s\\n' '{"runId":"'"$run"'","seq":4,"type":"finished","outcome":"cancelled"}'
+""" if cooperative else "exec /bin/sleep 30\n")
+                (self.bin / "arbol-claude-driver").write_text(with_capabilities(script))
+                began = time.monotonic()
+                with mock.patch("arbol_trunk_trivial.run.SILENCE_SECONDS", 3):
+                    status, lines = self.run_trunk("--exchange", FIRST, "--driver", "claude", "hi")
+                self.assertLess(time.monotonic() - began, 4)
+                self.assertEqual(status, 1)
+                self.assertEqual((self.log / "control").read_text(), '{"type":"stop"}\n')
+                self.assertEqual(self.database.exchanges[FIRST].error["code"], "driver_silent")
+                self.assertEqual(json.loads(lines[-1])["end"]["error"]["code"], "driver_silent")
+                run = self.database.runs[(FIRST, f"{FIRST}.1")]
+                self.assertEqual(run["outcome"], "cancelled" if cooperative else "interrupted")
+                self.assertEqual(run["usage"], {"inputTokens": 2})
+                self.assertEqual(self.database.messages[(FIRST, 2)], ("assistant", "Half an answer."))
+                self.assertEqual(os.listdir(self.root / "exchanges"), [])
+
     def test_a_whole_start_reads_no_settings_file_but_its_own(self) -> None:
         settings_file(self.home).parent.mkdir(parents=True)
         settings_file(self.home).write_text(json.dumps({"driver": "claude"}))

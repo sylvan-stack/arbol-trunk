@@ -36,3 +36,33 @@ class Start(unittest.TestCase):
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.
+
+# LOW TIER — DO NOT ENABLE OR RECREATE
+# Historical examples only. Read before adding related tests; never execute.
+# LOW-TIER-BEGIN: trunks/trivial/tests/test_start.py::Start.test_the_default_driver_comes_from_the_settings_file
+# Reason: Checks the straightforward command-driver-or-settings choice.
+# Source: arbol-trunk@0c9701e61fdb0afa33c1b85110395cc049b10497:trunks/trivial/tests/test_start.py
+# Retained evidence at review: Route preservation when the default driver is used, malformed settings and actual startup integration remain.
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_the_default_driver_comes_from_the_settings_file(self) -> None:
+#         write(settings_file(self.home), {"driver": "codex"})
+#         self.assertEqual(self.start().driver, "codex")
+#         self.assertEqual(self.start("--driver", "claude").driver, "claude")
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/test_start.py::Start.test_no_driver_handed_and_none_in_the_settings_file_is_refused_naming_the_file_and_key
+# Reason: Copies the entire static JSON diagnostic for the explicit missing-driver branch.
+# Source: arbol-trunk@0c9701e61fdb0afa33c1b85110395cc049b10497:trunks/trivial/tests/test_start.py
+# Retained evidence at review: Malformed settings, route preservation and startup failure/integration cases remain; diagnostic prose is not pinned.
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_no_driver_handed_and_none_in_the_settings_file_is_refused_naming_the_file_and_key(self) -> None:
+#         with self.assertRaises(Refusal) as caught:
+#             self.start()
+#         self.assertEqual(caught.exception.line(), '{"error":{"code":"invalid_input","message":"No Driver was handed, '
+#                                                   'and ~/.arbol/arbol-trunk/trivial.json names none under '
+#                                                   '\\"driver\\"."}}')
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END

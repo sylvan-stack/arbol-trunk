@@ -18,3 +18,271 @@ class TheRootTheKeychainAndTheFolder(_support.TheRootTheKeychainAndTheFolder):
         self.assertIn("2 seconds", message)
         self.assertEqual(self.database.connections, 0)
 # TEST-TIER-END trunks/trivial/tests/test_refusals.py::TheRootTheKeychainAndTheFolder.test_a_keychain_read_that_gives_no_answer_within_2_seconds_is_refused_naming_the_keychain
+
+# LOW TIER — DO NOT ENABLE OR RECREATE
+# Historical examples only. Read before adding related tests; never execute.
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::WholeStart.test_an_accepted_start_answers_with_the_acceptance_line_and_starts_the_driver
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: An accepted start answers with the acceptance line and starts the driver.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_an_accepted_start_answers_with_the_acceptance_line_and_starts_the_driver(self) -> None:
+#         status, lines = self.start(*ROUTE, "hi")
+#         self.assertEqual(json.loads(lines[0])["accepted"], True)
+#         self.assertEqual(len((self.home / "starts").read_text().splitlines()), 1)
+#         self.assertEqual(status, 1)  # the launcher ended without `finished`: the Exchange failed with driver_failed
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::WholeStart.test_an_unknown_option_is_refused_with_invalid_input
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: An unknown option is refused with invalid input.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_an_unknown_option_is_refused_with_invalid_input(self) -> None:
+#         self.refused("invalid_input", *ROUTE, "--bogus", "hi")
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::InvalidInput.test_the_command_line
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: The command line.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_the_command_line(self) -> None:
+#         for args, command in (((*ROUTE, "--bogus", "hi"), "run"), ((*ROUTE, "-v", "4", "hi"), "run"),
+#                               ((*ROUTE, "hi"), "list"), ((), ""), ((*ROUTE, "--root", "rct", "hi"), "run"),
+#                               ((*ROUTE, "--model", "opus", "hi"), "run"), ((*ROUTE, "one", "two"), "run"),
+#                               ((*ROUTE, "--cwd"), "run")):
+#             with self.subTest(args=args, command=command):
+#                 self.refused("invalid_input", *args, command=command)
+#         self.assertFalse((self.home / "security.args").exists(), "the Keychain was read")
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::InvalidInput.test_a_root_identifier_that_is_not_one_lower_case_word_of_letters_and_digits
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A root identifier that is not one lower case word of letters and digits.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_root_identifier_that_is_not_one_lower_case_word_of_letters_and_digits(self) -> None:
+#         for root in ("../rct", "Rct", "r-c-t", "rct/", ""):
+#             with self.subTest(root=root):
+#                 self.refused("invalid_input", *ROUTE, "hi", root=root)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::InvalidInput.test_no_message
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: No message.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_no_message(self) -> None:
+#         self.assertEqual(self.refused("invalid_input", *ROUTE), "No message was handed.")
+#         self.refused("invalid_input", *ROUTE, request={"message": None})
+#         self.assertFalse((self.home / "security.args").exists(), "the Keychain was read")
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::InvalidInput.test_an_identifier_that_is_not_a_uuid
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: An identifier that is not a uuid.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_an_identifier_that_is_not_a_uuid(self) -> None:
+#         for args in (("--exchange", "not-a-uuid"), ("--chat", "C3D4E5F6-0718-4293-A4B5-C6D7E8F90A1B"),
+#                      ("--replaces", "7f3a2c1e")):
+#             with self.subTest(args=args):
+#                 self.refused("invalid_input", *ROUTE, *args, "hi")
+#         self.refused("invalid_input", *ROUTE, request={"message": "hi", "exchange": 7})
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::InvalidInput.test_a_working_folder_that_is_not_absolute_or_does_not_exist
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A working folder that is not absolute or does not exist.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_working_folder_that_is_not_absolute_or_does_not_exist(self) -> None:
+#         for folder in ("work", "./work", str(self.home / "missing"), str(self.home / "start.json")):
+#             with self.subTest(folder=folder):
+#                 (self.home / "start.json").write_text("{}")
+#                 self.refused("invalid_input", *ROUTE, "--cwd", folder, "hi")
+#                 self.refused("invalid_input", *ROUTE, request={"message": "hi", "workingFolder": folder})
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::InvalidInput.test_replaces_together_with_a_message
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: Replaces together with a message.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_replaces_together_with_a_message(self) -> None:
+#         exchange = "2d4f6a8c-1b3e-4c5d-8e7f-9a0b1c2d3e4f"
+#         self.assertIn("--replaces takes no message", self.refused("invalid_input", *ROUTE, "--replaces", exchange,
+#                                                                   "hi"))
+#         self.refused("invalid_input", *ROUTE, request={"replaces": exchange, "message": "hi"})
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::InvalidInput.test_a_request_file_that_cannot_be_read_or_holds_no_object
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A request file that cannot be read or holds no object.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_request_file_that_cannot_be_read_or_holds_no_object(self) -> None:
+#         self.refused("invalid_input", *ROUTE, "--request", str(self.home / "none.json"), "hi")
+#         for body in ("[1]", "{", '{"route": "claude", "message": "hi"}', '{"message": 4}'):
+#             with self.subTest(body=body):
+#                 (self.home / "start.json").write_text(body)
+#                 self.refused("invalid_input", "--request", str(self.home / "start.json"))
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::NoDriver.test_no_driver_handed_while_the_settings_file_names_none_names_the_file_and_its_key
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: No driver handed while the settings file names none names the file and its key.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_no_driver_handed_while_the_settings_file_names_none_names_the_file_and_its_key(self) -> None:
+#         for content in (None, "{}", '{"driver": ""}', '{"driver": 1}', "["):
+#             with self.subTest(content=content):
+#                 if content is not None:
+#                     settings_file(self.home).parent.mkdir(parents=True, exist_ok=True)
+#                     settings_file(self.home).write_text(content)
+#                 message = self.refused("invalid_input", "--subscription", "anthropic", "--model", "sonnet", "hi")
+#                 self.assertEqual(message, 'No Driver was handed, and ~/.arbol/arbol-trunk/trivial.json names none '
+#                                           'under "driver".')
+#         self.assertFalse((self.home / "security.args").exists(), "the Keychain was read")
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::NoDriver.test_the_driver_of_the_settings_file_is_started_when_none_is_handed
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: The driver of the settings file is started when none is handed.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_the_driver_of_the_settings_file_is_started_when_none_is_handed(self) -> None:
+#         settings_file(self.home).parent.mkdir(parents=True)
+#         settings_file(self.home).write_text('{"driver": "claude"}')
+#         status, lines = self.start("hi")
+#         self.assertEqual(json.loads(lines[0])["accepted"], True)
+#         self.assertEqual(len((self.home / "starts").read_text().splitlines()), 1)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::TheRootTheKeychainAndTheFolder.test_a_root_without_a_readable_root_json_is_unknown
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A root without a readable root json is unknown.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_root_without_a_readable_root_json_is_unknown(self) -> None:
+#         self.refused("unknown_root", *ROUTE, "hi", root="nosuch")
+#         self.assertEqual(os.listdir(roots_folder(self.home)), ["rct"])
+#         for content in ("{", "[]", '{"rootContract": 1}', '{"database": "arbol_rct", "rootContract": "1"}'):
+#             with self.subTest(content=content):
+#                 self.root_json(content)
+#                 self.refused("unknown_root", *ROUTE, "hi")
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::TheRootTheKeychainAndTheFolder.test_a_root_whose_version_is_not_in_root_contracts_is_a_contract_mismatch
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A root whose version is not in root contracts is a contract mismatch.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_root_whose_version_is_not_in_root_contracts_is_a_contract_mismatch(self) -> None:
+#         self.assertEqual(ROOT_CONTRACTS, (1,))
+#         for version in (2, 0, 999):
+#             with self.subTest(version=version):
+#                 self.root_json({"database": "arbol_rct", "rootContract": version})
+#                 message = self.refused("contract_mismatch", *ROUTE, "hi")
+#                 self.assertIn(f"version {version}", message)
+#         self.assertFalse((self.home / "security.args").exists(), "the Keychain was read")
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::TheRootTheKeychainAndTheFolder.test_a_keychain_read_that_fails_is_refused_naming_the_keychain
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A keychain read that fails is refused naming the keychain.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_keychain_read_that_fails_is_refused_naming_the_keychain(self) -> None:
+#         self.security = security_stand_in(self.home, status=51)
+#         message = self.refused("database_unavailable", *ROUTE, "hi")
+#         self.assertIn("Keychain", message)
+#         self.assertEqual(self.database.connections, 0)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::TheRootTheKeychainAndTheFolder.test_a_folder_that_cannot_be_made_is_trunk_failed_and_leaves_nothing_behind
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A folder that cannot be made is trunk failed and leaves nothing behind.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_folder_that_cannot_be_made_is_trunk_failed_and_leaves_nothing_behind(self) -> None:
+#         os.chmod(self.exchanges, 0o500)
+#         try:
+#             self.assertIn("folder", self.refused("trunk_failed", *ROUTE, "hi"))
+#         finally:
+#             os.chmod(self.exchanges, 0o700)
+#         self.assertEqual(self.database.connections, 0)
+#         os.rmdir(self.exchanges)
+#         self.refused("trunk_failed", *ROUTE, "hi")
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::TheDatabaseAtAcceptance.test_a_server_that_cannot_be_reached_is_refused_as_unavailable
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A server that cannot be reached is refused as unavailable.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_server_that_cannot_be_reached_is_refused_as_unavailable(self) -> None:
+#         self.database.fail_connect = 1
+#         self.assertIn("cannot be reached", self.refused("database_unavailable", *ROUTE, "hi"))
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::TheDatabaseAtAcceptance.test_work_with_the_database_not_done_within_10_seconds_of_the_start_is_refused_as_unavailable
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: Work with the database not done within 10 seconds of the start is refused as unavailable.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_work_with_the_database_not_done_within_10_seconds_of_the_start_is_refused_as_unavailable(self) -> None:
+#         for delay_connect in (True, False):
+#             with self.subTest(delay_connect=delay_connect):
+#                 self.database = FakeDatabase(delay=60) if delay_connect else SlowAcceptance()
+#                 began = time.monotonic()
+#                 message = self.refused("database_unavailable", *ROUTE, "hi", started=began - 9.5)
+#                 self.assertLess(time.monotonic() - began, 1.5)
+#                 self.assertIn("within 10 seconds of the start", message)
+#                 self.assertEqual(self.database.closed, 0 if delay_connect else 1)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::TheDatabaseAtAcceptance.test_a_chat_with_an_open_exchange_is_busy_and_the_refusal_names_it
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A chat with an open exchange is busy and the refusal names it.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_chat_with_an_open_exchange_is_busy_and_the_refusal_names_it(self) -> None:
+#         self.database.chats[CHAT] = "2026-10-15T09:30:00Z"
+#         self.database.exchanges[OPEN] = fakes.Exchange(OPEN, CHAT, 1, "open", "trivial", "0", {}, None, "/", None)
+#         message = self.refused("chat_busy", *ROUTE, "--chat", CHAT, "hi")
+#         self.assertEqual(message, f"The chat has an Exchange in progress: {OPEN}.")
+#         self.assertEqual(self.database.closed, 1)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_refusals.py::TheDatabaseAtAcceptance.test_a_chat_whose_exchanges_have_ended_takes_the_next_message
+# Reason: Large input/state/error tables and fake database deadlines repeat parsing and retained real contract behavior; retain the actual hanging credential process boundary. Case reviewed: A chat whose exchanges have ended takes the next message.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_refusals.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_chat_whose_exchanges_have_ended_takes_the_next_message(self) -> None:
+#         self.database.chats[CHAT] = "2026-10-15T09:30:00Z"
+#         self.database.exchanges[OPEN] = fakes.Exchange(OPEN, CHAT, 1, "failed", "trivial", "0", {}, None, "/", None)
+#         status, lines = self.start(*ROUTE, "--chat", CHAT, "hi")
+#         self.assertEqual(json.loads(lines[0])["number"], 2)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END

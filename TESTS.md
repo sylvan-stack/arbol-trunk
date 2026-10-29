@@ -4,11 +4,11 @@ Both tiers have uncommented source. Only the top-tier cases below may be selecte
 
 [Mid-tier descriptions and justifications](MID_TIER.md) · [Complete inventory and tier justifications](docs/test-inventory.md) · [Machine-readable inventory](test-tiers.json)
 
-Reviewed revision: `d067d7dd7fe72bd1f47c636df51bee53bd7aeb44` (28 October 2026), plus the preceding local pruning changes. No tests were run for this reset.
+Reviewed revision: `d05362c865f8aea86b162c1f7a275c552f48ed43` under SYL-327 (29 October 2026). No tests were run.
 
 ## Selection and limits
 
-3 top-tier inventory entries and 240 mid-tier entries are available. Definitions, scenarios, programs and entry points overlap; this is not a runtime suite count. Mid-tier source remains uncommented at the owner's request. Provisional classifications are execution decisions, not semantic approval. Low-tier removals remain removed.
+3 top-tier inventory entries and 18 mid-tier entries are available after the higher-bar review. 222 low-tier entries were removed under SYL-327. Definitions, scenarios, programs and entry points overlap; this is not a runtime suite count. Top-tier bodies are unchanged. Retained mid-tier sources remain uncommented.
 
 ## Active top tier
 

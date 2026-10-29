@@ -30,3 +30,72 @@ class RejectedRows(_support.RejectedRows):
         self.assertEqual([params[-1] for sql, params in calls + later if sql.startswith("INSERT INTO messages")],
                          ["refuse this", "keep", "keep"])
 # TEST-TIER-END trunks/trivial/tests/test_rejected.py::RejectedRows.test_a_row_already_refused_is_not_retried_when_the_outer_commit_loses_the_server
+
+# LOW TIER — DO NOT ENABLE OR RECREATE
+# Historical examples only. Read before adding related tests; never execute.
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_rejected.py::RejectedRows.test_classes_22_and_23_are_permanent_and_other_failures_are_retryable
+# Reason: SQLSTATE maps, mocked savepoint counts and ordinary row refusal overlap stronger actual contract saving; retain the compound refused-row plus outer-commit outage invariant. Case reviewed: Classes 22 and 23 are permanent and other failures are retryable.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_rejected.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_classes_22_and_23_are_permanent_and_other_failures_are_retryable(self) -> None:
+#         for error in (psycopg.errors.CheckViolation(), psycopg.errors.InvalidTextRepresentation(),
+#                       psycopg.errors.ConnectionFailure()):
+#             with self.subTest(sqlstate=error.sqlstate):
+#                 connection, _raw, calls = self.connection(error)
+#                 expected = DatabaseUnavailable if error.sqlstate == "08006" else RowRejected
+#                 with self.assertRaises(expected):
+#                     asyncio.run(connection.save(MessageRow("x", 7, "refuse this")))
+#                 self.assertEqual(len(calls), 1)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_rejected.py::RejectedRows.test_a_refused_row_is_skipped_without_retry_and_following_rows_are_saved
+# Reason: SQLSTATE maps, mocked savepoint counts and ordinary row refusal overlap stronger actual contract saving; retain the compound refused-row plus outer-commit outage invariant. Case reviewed: A refused row is skipped without retry and following rows are saved.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_rejected.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_a_refused_row_is_skipped_without_retry_and_following_rows_are_saved(self) -> None:
+#         connection, _raw, calls = self.connection(psycopg.errors.CheckViolation())
+#
+#         async def work() -> Saver:
+#             async def connect() -> PostgresConnection:
+#                 return connection
+#             saver = Saver(connect)
+#             saver.add([MessageRow("x", 7, "refuse this"), MessageRow("x", 8, "keep this")])
+#             saver.start()
+#             for _ in range(100):
+#                 await asyncio.sleep(0)
+#                 if saver.saved == 2:
+#                     break
+#             await saver.stop()
+#             return saver
+#
+#         saver = asyncio.run(work())
+#         self.assertEqual([params[-1] for _sql, params in calls], ["refuse this", "keep this"])
+#         self.assertEqual(saver.unsaved, [])
+#         self.assertEqual(cast(RowRejected, saver.rejected).line, 7)
+#         self.assertEqual(saver.failures, 0)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END
+
+# LOW-TIER-BEGIN: trunks/trivial/tests/mid/test_mid_rejected.py::RejectedRows.test_final_saving_uses_a_savepoint_and_preserves_an_already_written_end
+# Reason: SQLSTATE maps, mocked savepoint counts and ordinary row refusal overlap stronger actual contract saving; retain the compound refused-row plus outer-commit outage invariant. Case reviewed: Final saving uses a savepoint and preserves an already written end.
+# Source: arbol-trunk@d05362c865f8aea86b162c1f7a275c552f48ed43:trunks/trivial/tests/mid/test_mid_rejected.py
+# Historical fixtures and class context are available at the source revision; no active dependencies restored.
+# LOW-TIER-SOURCE-BEGIN
+#     def test_final_saving_uses_a_savepoint_and_preserves_an_already_written_end(self) -> None:
+#         for end_written in (False, True):
+#             with self.subTest(end_written=end_written):
+#                 connection, raw, calls = self.connection(psycopg.errors.CheckViolation())
+#                 asyncio.run(connection.end("x", [MessageRow("x", 7, "refuse this"), MessageRow("x", 8, "keep")],
+#                                            "interrupted", datetime.now(UTC), None, end_written=end_written))
+#                 self.assertEqual(raw.transaction.call_count, 3)  # outer atomic end, then a savepoint for each row
+#                 update = calls[-1][1]
+#                 self.assertEqual(update[0], "interrupted" if end_written else "failed")
+#                 if not end_written:
+#                     self.assertEqual(update[2].obj["code"], "trunk_failed")
+#                     self.assertIn("line 7", update[2].obj["message"])
+#                 self.assertEqual(len([sql for sql, _ in calls if sql.startswith("INSERT INTO messages")]), 2)
+# LOW-TIER-SOURCE-END
+# LOW-TIER-END

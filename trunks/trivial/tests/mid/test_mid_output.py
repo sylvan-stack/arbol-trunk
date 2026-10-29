@@ -2,82 +2,11 @@
 from __future__ import annotations
 
 import test_output as _support
-from test_output import (
-    EventsFile,
-    ForegroundOutput,
-    Output,
-    Path,
-    as_event,
-    json,
-    mock,
-    os,
-    signal,
-    tempfile,
-    time,
-    unittest,
-)
+from test_output import (Output ,mock ,os ,signal)
 
 
 class ForegroundOutput(_support.ForegroundOutput):
-# TEST-TIER-BEGIN trunks/trivial/tests/test_output.py::ForegroundOutput.test_a_pipe_that_nothing_reads_never_holds_up_the_writer
-    def test_a_pipe_that_nothing_reads_never_holds_up_the_writer(self) -> None:
-        reader, writer = os.pipe()
-        self.addCleanup(os.close, reader)
-        self.addCleanup(os.close, writer)
-        output = Output(descriptor=writer)
-        began = time.monotonic()
-        for _ in range(10000):
-            output.line("x" * 1000)
-        self.assertLess(time.monotonic() - began, 0.5)
-        self.assertTrue(output.broken)
-        self.assertTrue(os.get_blocking(writer))
-# TEST-TIER-END trunks/trivial/tests/test_output.py::ForegroundOutput.test_a_pipe_that_nothing_reads_never_holds_up_the_writer
 
-# TEST-TIER-BEGIN trunks/trivial/tests/test_output.py::ForegroundOutput.test_a_closed_pipe_stops_output_and_does_not_stop_the_events_file
-    def test_a_closed_pipe_stops_output_and_does_not_stop_the_events_file(self) -> None:
-        reader, writer = os.pipe()
-        os.close(reader)
-        self.addCleanup(os.close, writer)
-        output = Output(descriptor=writer)
-        with tempfile.TemporaryDirectory() as name:
-            path = Path(name) / "events.jsonl"
-            path.touch()
-            events = EventsFile(path, output)
-            try:
-                event = as_event(b'{"type":"text","text":"hello"}')
-                assert event is not None
-                events.append_event(event)
-                events.append_end({"state": "completed"})
-            finally:
-                events.close()
-            self.assertTrue(output.broken)
-            self.assertTrue(os.get_blocking(writer))
-            self.assertEqual(len(path.read_text().splitlines()), 2)
-            self.assertEqual(json.loads(path.read_text().splitlines()[-1])["end"]["state"], "completed")
-# TEST-TIER-END trunks/trivial/tests/test_output.py::ForegroundOutput.test_a_closed_pipe_stops_output_and_does_not_stop_the_events_file
-
-# TEST-TIER-BEGIN trunks/trivial/tests/test_output.py::ForegroundOutput.test_every_kind_of_line_is_copied_after_it_reaches_the_file
-    def test_every_kind_of_line_is_copied_after_it_reaches_the_file(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            path = Path(name) / "events.jsonl"
-            path.touch()
-            copied: list[str] = []
-
-            def copy(text: str) -> None:
-                self.assertEqual(path.read_text().splitlines()[-1], text)
-                copied.append(text)
-
-            events = EventsFile(path, Output(copy))
-            try:
-                event = as_event(b'{ "type": "text", "text": "hello" }')
-                assert event is not None
-                events.append_event(event)
-                events.append_answer('{"type":"answer","askId":"a","answer":{"type":"decline"}}')
-                events.append_end({"state": "cancelled"})
-            finally:
-                events.close()
-            self.assertEqual(copied, path.read_text().splitlines())
-# TEST-TIER-END trunks/trivial/tests/test_output.py::ForegroundOutput.test_every_kind_of_line_is_copied_after_it_reaches_the_file
 
 # TEST-TIER-BEGIN trunks/trivial/tests/test_output.py::ForegroundOutput.test_a_termination_signal_is_delivered_only_after_shared_descriptor_flags_are_restored
     def test_a_termination_signal_is_delivered_only_after_shared_descriptor_flags_are_restored(self) -> None:

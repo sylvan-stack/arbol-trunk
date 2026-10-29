@@ -35,10 +35,10 @@
       "status": "available",
       "line_before": 135,
       "end_before": 141,
-      "reason": "Explicit packaged qualification coordinates runtime integrity, retained unit selection or the actual isolated Root/Trunk/Driver/database live boundary; reduced checks do not establish historical full qualification.",
+      "reason": "Explicit packaged qualification coordinates runtime integrity, retained unit selection or the actual isolated Root/Trunk/Driver/database live boundary; reduced checks do not establish historical full qualification. Full Build qualification is now refused pending an explicitly requested review of the reduced qualification map.",
       "review": "individually-reviewed-higher-bar",
       "line": 137,
-      "file_sha256": "41a191106aea1a05d56b95d9301b14ea7489531c40572af1995c7df654acfcdb",
+      "file_sha256": "7011b2fc04fc7e6ecb14ea38acba60e467a7d5aaed5d7f41b0aab114e4ce6ffb",
       "previous_id": "trunks/trivial/scripts/check_build.py::unit",
       "previous_file": "trunks/trivial/scripts/check_build.py",
       "previous_line": 133,
@@ -63,10 +63,10 @@
       "status": "available",
       "line_before": 166,
       "end_before": 194,
-      "reason": "Explicit packaged qualification coordinates runtime integrity, retained unit selection or the actual isolated Root/Trunk/Driver/database live boundary; reduced checks do not establish historical full qualification.",
+      "reason": "Explicit packaged qualification coordinates runtime integrity, retained unit selection or the actual isolated Root/Trunk/Driver/database live boundary; reduced checks do not establish historical full qualification. Full Build qualification is now refused pending an explicitly requested review of the reduced qualification map.",
       "review": "individually-reviewed-higher-bar",
-      "line": 168,
-      "file_sha256": "41a191106aea1a05d56b95d9301b14ea7489531c40572af1995c7df654acfcdb",
+      "line": 169,
+      "file_sha256": "7011b2fc04fc7e6ecb14ea38acba60e467a7d5aaed5d7f41b0aab114e4ce6ffb",
       "previous_id": "trunks/trivial/scripts/check_build.py::live",
       "previous_file": "trunks/trivial/scripts/check_build.py",
       "previous_line": 168,
@@ -3846,6 +3846,7 @@
     },
     "tests_run": false,
     "top_changed": false,
-    "limits": "Counts are static inventory entries; programs, entry points and contained cases overlap. Reduced selections do not establish historical full qualification."
+    "limits": "Counts are static inventory entries; programs, entry points and contained cases overlap. Reduced selections do not establish historical full qualification.",
+    "qualification": "Historical packaged unit gate refuses pending explicitly requested qualification-map review."
   }
 }

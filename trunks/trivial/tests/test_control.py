@@ -1,5 +1,6 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """Reading `control` (RCT-1.7)."""
+
 
 import os
 import tempfile

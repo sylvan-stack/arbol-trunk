@@ -1,4 +1,9 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+import json
+from unittest import mock
+
+from scripts.build_support import COMPONENT, ENTRY, ROOT, build_folder, metadata, target
+
 import shutil
 import tempfile
 import unittest

@@ -1,4 +1,12 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+import json
+import os
+import stat
+import tempfile
+from pathlib import Path
+
+from arbol_trunk_trivial.request import run_request, write_request
+
 import unittest
 from typing import Any
 
@@ -15,7 +23,6 @@ HISTORY: list[dict[str, Any]] = [
 
 class Request(unittest.TestCase):
     pass  # TEST-TIER-EMPTY-SUITE; helpers remain importable.
-
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.

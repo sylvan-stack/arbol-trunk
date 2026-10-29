@@ -1,7 +1,11 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """Refusals of `run`, judged from the command line to the answer (RCT-2, "Accepting a message"): one line
 `{"error":{"code","message"}}`, the exit status 1, no folder, no row, and no Driver started. With a home of the test's
 own, a stand-in `security`, a stand-in launcher and the fake database: no database server, no Driver and no network."""
+
+from arbol_trunk_trivial.root import ROOT_CONTRACTS, roots_folder
+from arbol_trunk_trivial.settings import settings_file
+
 
 import asyncio
 import copy
@@ -148,7 +152,6 @@ class SlowConnection(fakes.FakeConnection):
     async def accept(self, acceptance: Acceptance) -> Accepted:
         await asyncio.sleep(60)
         raise AssertionError("unreachable")
-
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.

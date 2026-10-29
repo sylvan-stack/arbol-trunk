@@ -1,4 +1,9 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+import json
+
+from scripts.build_support import read_object
+from scripts.check_build import program_policy, unit, verify
+
 import tempfile
 import unittest
 from pathlib import Path

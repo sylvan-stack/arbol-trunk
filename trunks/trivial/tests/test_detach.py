@@ -1,4 +1,7 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+import os
+
+
 import json
 import select
 import subprocess
@@ -44,7 +47,6 @@ class Background(unittest.TestCase):
             time.sleep(0.02)
         child.wait(10)
         return line, json.loads(report.read_text()), child
-
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.

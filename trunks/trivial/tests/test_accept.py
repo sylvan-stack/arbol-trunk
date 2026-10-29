@@ -1,4 +1,7 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+
+from arbol_trunk_trivial.errors import Refusal
+
 import asyncio
 import json
 import os
@@ -60,7 +63,6 @@ class AcceptanceHome(unittest.TestCase):
 
 class AcceptingAMessage(AcceptanceHome):
     pass  # TEST-TIER-EMPTY-SUITE; helpers remain importable.
-
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.

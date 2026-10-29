@@ -1,4 +1,8 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+import os
+
+from arbol_trunk_trivial.driver import Line, as_event
+
 import json
 import tempfile
 import unittest
@@ -24,7 +28,6 @@ class Events(unittest.TestCase):
         self.path.write_bytes(b"")
         self.file = EventsFile(self.path)
         self.addCleanup(self.file.close)
-
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.

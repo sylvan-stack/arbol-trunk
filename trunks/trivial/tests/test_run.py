@@ -1,6 +1,15 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 """A whole Exchange, from the message to its end, with a stand-in launcher and the fake database: no database server,
 no Driver and no network."""
+
+from audit import opened_files
+from fakes import FakeConnection, FakeDatabase
+from arbol_trunk_trivial.database import RowRejected
+from arbol_trunk_trivial.events import EventsFile
+from arbol_trunk_trivial.folder import ExchangeFolder
+from arbol_trunk_trivial.rows import MessageRow, Row
+from arbol_trunk_trivial.settings import settings_file
+
 
 import asyncio
 import json
@@ -130,7 +139,6 @@ class WholeExchange(unittest.TestCase):
                 os.close(descriptor)
 
         return stop
-
 
 
 # Archived complete imports; restore needed names in their original scope, not at this file tail.

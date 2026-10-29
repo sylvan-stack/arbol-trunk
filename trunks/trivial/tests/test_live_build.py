@@ -1,4 +1,10 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+import json
+import subprocess
+from types import SimpleNamespace
+
+from scripts.check_build import driver_bridge, live
+
 import contextlib
 import io
 import os

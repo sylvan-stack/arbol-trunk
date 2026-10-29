@@ -1,4 +1,10 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+import copy
+import json
+from dataclasses import replace
+
+from arbol_trunk_trivial.accept import Repeated
+
 import asyncio
 from unittest import mock
 
@@ -28,7 +34,7 @@ class ReplacementHome(AcceptanceHome):
 
 
 class ReplacingAMessage(ReplacementHome):
-    pass  # Shared fixture base; case bodies live in top/ and mid/.
+    pass  # Shared fixtures; case bodies live in top/ and mid/.
 
 
 class ReplacementHistory(ReplacementHome):

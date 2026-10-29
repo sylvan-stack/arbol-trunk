@@ -1,4 +1,18 @@
-# Shared fixtures only; test bodies are in top/ and mid/. See TESTS.md.
+# Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
+import json
+import os
+import time
+from unittest.mock import patch
+
+from arbol_trunk_trivial.driver import (
+    CapabilityError,
+    CapabilityStopped,
+    DriverRun,
+    capabilities,
+    capability_query,
+    migration_ready,
+)
+
 import asyncio
 import shlex
 import sys

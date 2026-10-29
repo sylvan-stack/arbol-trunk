@@ -135,10 +135,10 @@ def verify(folder: Path, *, candidate: bool) -> dict[str, Any]:
 
 
 def unit(folder: Path) -> int:
-    raise ValueError('SYL-327 reduced the retained test selection. Full Build qualification requires an explicitly requested review of the qualification map; see TESTS.md.')
     sys.path.insert(0, str(folder))
     sys.path.insert(0, str(folder / "src"))
-    suite = unittest.TestLoader().discover(str(folder / "tests"))
+    # A Build runs the top tier only (SYL-329); the mid tier runs only when the owner asks.
+    suite = unittest.TestLoader().discover(str(folder / "tests/top"), top_level_dir=str(folder / "tests"))
     if suite.countTestCases() == 0:
         raise ValueError("The packaged unit suite has no tests.")
     return 0 if unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful() else 1

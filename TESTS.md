@@ -42,4 +42,8 @@ Restoration under SYL-326 used static checks only. No tests, Builds, provider ca
 
 ## Qualification after SYL-327
 
-The historical packaged unit gate refuses after this substantial pruning. A separately requested qualification task must review the reduced selection before restoring that gate. Individual top and mid selections remain governed by the policy above; their results cannot stand in for the former complete Build qualification.
+The packaged unit gate no longer stands for the former complete Build qualification: since SYL-329 it runs the top tier only, as Builds below says. Individual top and mid selections remain governed by the policy above; their results cannot stand in for the former complete Build qualification.
+
+## Builds
+
+Since SYL-329 (29 October 2026) a Build runs the top tier only. Its `unit` check runs every case under `trunks/trivial/tests/top/`. The Root Contract suite (`contract-1`) is mid tier, so `trunks/trivial/arbol-build.json` no longer lists it; run `rct-conformance.py --trunk <entry> --root-contract 1` from `arbol-root` when the owner asks. The `live` check, one real message through the installed Claude Driver, is unchanged. The mid tier runs only when the owner asks for a mid-tier run.

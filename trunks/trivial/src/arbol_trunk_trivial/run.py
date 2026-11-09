@@ -128,9 +128,9 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
     if launcher is None:
         return failed("driver_failed", f"No folder of the search path holds the launcher "
                                        f"{launcher_name(prepared.driver)}.")
-    request = run_request(exchange=folder.exchange, chat=exchange.chat, route=prepared.handed.route,
-                          working_folder=prepared.handed.working_folder, history=exchange.history,
-                          message=exchange.message)
+    request = run_request(exchange=folder.exchange, root=prepared.root.identifier, chat=exchange.chat,
+                          route=prepared.handed.route, working_folder=prepared.handed.working_folder,
+                          history=exchange.history, message=exchange.message)
     request_file = write_request(folder.path, request)
     control = ControlFile(folder.path / "control")
     try:

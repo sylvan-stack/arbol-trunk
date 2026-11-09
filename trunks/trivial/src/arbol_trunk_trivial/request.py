@@ -13,7 +13,7 @@ from .folder import encode, write_file
 REQUEST_FILE = "run-1.json"
 
 
-def run_request(*, exchange: str, chat: str, route: dict[str, str], working_folder: str,
+def run_request(*, exchange: str, root: str, chat: str, route: dict[str, str], working_folder: str,
                 history: list[dict[str, Any]], message: str) -> dict[str, Any]:
     request: dict[str, Any] = {"runId": f"{exchange}.1"}
     for name, field in (("subscription", "subscriptionId"), ("model", "model"), ("effort", "effort")):
@@ -22,6 +22,7 @@ def run_request(*, exchange: str, chat: str, route: dict[str, str], working_fold
     request["workingDirectory"] = working_folder
     request["history"] = history
     request["input"] = {"role": "user", "text": message}
+    request["rootId"] = root
     request["chatSessionId"] = chat
     request["tools"] = "all"
     return request

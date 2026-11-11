@@ -10,5 +10,5 @@ if _TYPE_CHECKING:
     from mid.archived.trunks.trivial.scripts.check_build import unit as unit
     from mid.archived.trunks.trivial.scripts.check_build import verify as verify
 else:
-    _tier_source = _TierPath(__file__).resolve().parents[3] / 'trunks/trivial/tests/mid/archived/trunks/trivial/scripts/check_build.py'
+    _tier_source = _TierPath(__file__).resolve().parents[1] / 'tests/mid/archived/trunks/trivial/scripts/check_build.py'
     exec(compile(_tier_source.read_bytes(), str(_tier_source), "exec"), globals())

@@ -160,7 +160,8 @@ def driver_bridge(launcher: Path, owner: Path, state: Path) -> None:
     if not driver.is_file() or not os.access(driver, os.X_OK):
         raise ValueError("The live check needs the installed Claude Driver.")
     quote = shlex.quote
-    launcher.write_text("#!/bin/sh\n" + f"HOME={quote(str(owner))} "
+    # claude finds its Keychain login under the account named by USER; without it the login is invisible.
+    launcher.write_text("#!/bin/sh\n" + f"HOME={quote(str(owner))} USER={quote(pwd.getpwuid(os.getuid()).pw_name)} "
                         f"PATH={quote(str(owner / '.local/bin') + ':/usr/bin:/bin:/usr/sbin:/sbin')} "
                         f"exec {quote(str(driver))} --state-dir {quote(str(state))} \"$@\"\n")
     launcher.chmod(0o755)

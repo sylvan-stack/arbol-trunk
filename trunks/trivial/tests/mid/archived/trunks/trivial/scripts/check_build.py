@@ -144,10 +144,10 @@ def unit(folder: Path) -> int:
 
 
 def live_fixture(folder: Path, owner: Path) -> Any:
-    # The same external readonly checkout as contract-1. No Root code is copied into this package (TRV-D21).
-    root = owner / "repos/sylvan-stack/readonly/arbol-root"
+    # The shared arbol-root checkout (single-checkout migration). No Root code is copied into this package (TRV-D21).
+    root = owner / "repos/sylvan-stack/arbol-root"
     if read_object(root / "package.json").get("name") != "@sylvan-stack/arbol-root":
-        raise ValueError("The live check needs the readonly arbol-root checkout used by contract-1.")
+        raise ValueError("The live check needs the shared arbol-root checkout.")
     sys.path.insert(0, str(root / "contract/conformance"))
     fixture = importlib.import_module("rct_conformance.home").ScenarioHome
     return fixture.create("live", [str(folder / ENTRY)], 1, root / "contract/1/layout.sql",

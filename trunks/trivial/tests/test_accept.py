@@ -1,6 +1,7 @@
+__all__ = [
+    "AcceptanceHome", "CHAT", "Refusal",
+]
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
-
-from arbol_trunk_trivial.errors import Refusal
 
 import asyncio
 import json
@@ -17,6 +18,7 @@ from stand_ins import security_stand_in
 from arbol_trunk_trivial.accept import Exchange, accept_in_database, accept_message
 from arbol_trunk_trivial.command import handed, parse
 from arbol_trunk_trivial.database import Acceptance, Accepted, Connection
+from arbol_trunk_trivial.errors import Refusal
 from arbol_trunk_trivial.root import roots_folder
 from arbol_trunk_trivial.start import Prepared, prepare
 

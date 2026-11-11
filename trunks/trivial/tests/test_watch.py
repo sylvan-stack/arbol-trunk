@@ -1,3 +1,7 @@
+__all__ = [
+    "MovedClock", "Path", "SignsOfLife", "Watch", "mock", "os", "signal", "subprocess", "sys", "tempfile",
+    "threading", "time",
+]
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 import os
 import signal
@@ -6,14 +10,14 @@ import sys
 import tempfile
 import threading
 import time
+import unittest
 from pathlib import Path
 from unittest import mock
 
 from fake_driver import MovedClock
+
 from arbol_trunk_trivial.life import SignsOfLife
 from arbol_trunk_trivial.watch import Watch
-
-import unittest
 
 
 class Watching(unittest.TestCase):

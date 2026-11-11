@@ -2,14 +2,10 @@
 """A whole Exchange, from the message to its end, with a stand-in launcher and the fake database: no database server,
 no Driver and no network."""
 
-from audit import opened_files
-from fakes import FakeConnection, FakeDatabase
-from arbol_trunk_trivial.database import RowRejected
-from arbol_trunk_trivial.events import EventsFile
-from arbol_trunk_trivial.folder import ExchangeFolder
-from arbol_trunk_trivial.rows import MessageRow, Row
-from arbol_trunk_trivial.settings import settings_file
-
+__all__ = [
+    "EventsFile", "ExchangeFolder", "FakeConnection", "MessageRow", "Row", "RowRejected", "opened_files",
+    "settings_file",
+]
 
 import asyncio
 import json
@@ -22,12 +18,18 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from fakes import FakeDatabase
+from audit import opened_files
+from fakes import FakeConnection, FakeDatabase
 from stand_ins import security_stand_in, with_capabilities
 
 from arbol_trunk_trivial.command import handed, parse
+from arbol_trunk_trivial.database import RowRejected
+from arbol_trunk_trivial.events import EventsFile
+from arbol_trunk_trivial.folder import ExchangeFolder
 from arbol_trunk_trivial.root import roots_folder
+from arbol_trunk_trivial.rows import MessageRow, Row
 from arbol_trunk_trivial.run import Output, run_exchange
+from arbol_trunk_trivial.settings import settings_file
 from arbol_trunk_trivial.start import prepare
 
 CHAT = "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b"

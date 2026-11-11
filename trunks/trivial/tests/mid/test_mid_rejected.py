@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_rejected as _support
-from test_rejected import (Any ,AsyncMock ,DatabaseUnavailable ,MessageRow ,Row ,UTC ,asyncio ,datetime ,psycopg)
+from test_rejected import UTC, Any, AsyncMock, DatabaseUnavailable, MessageRow, Row, asyncio, datetime, psycopg
 
 
 class RejectedRows(_support.RejectedRows):

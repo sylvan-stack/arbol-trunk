@@ -1,8 +1,9 @@
+__all__ = [
+    "Background", "os",
+]
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
-import os
-
-
 import json
+import os
 import select
 import subprocess
 import sys

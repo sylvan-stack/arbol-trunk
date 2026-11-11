@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_termination as _support
-from test_termination import (Path ,SOURCE ,os ,signal ,subprocess ,sys ,tempfile)
+from test_termination import SOURCE, Path, os, signal, subprocess, sys, tempfile
 
 
 class Termination(_support.Termination):

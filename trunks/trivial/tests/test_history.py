@@ -1,10 +1,11 @@
+__all__ = [
+    "make_history",
+]
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
-
-from arbol_trunk_trivial.history import HistoryRow, make_history
 
 import unittest
 
-from arbol_trunk_trivial.history import HistoryRow
+from arbol_trunk_trivial.history import HistoryRow, make_history
 
 
 def message(number: int, position: int, text: str, *, replaced: bool = False) -> HistoryRow:

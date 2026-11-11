@@ -3,18 +3,7 @@ from __future__ import annotations
 
 import test_detach as _support
 from test_detach import (
-    Background,
-    CHILD,
-    Path,
-    SOURCE,
-    json,
     os,
-    select,
-    subprocess,
-    sys,
-    tempfile,
-    time,
-    unittest,
 )
 
 

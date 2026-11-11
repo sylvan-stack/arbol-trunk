@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_watch as _support
-from test_watch import (Path ,os ,signal ,subprocess ,sys ,tempfile ,time)
+from test_watch import Path, os, signal, subprocess, sys, tempfile, time
 
 
 class WatchLifetime(_support.WatchLifetime):

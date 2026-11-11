@@ -1,9 +1,8 @@
+__all__ = [
+    "json", "program_policy", "read_object", "unit", "verify",
+]
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 import json
-
-from scripts.build_support import read_object
-from scripts.check_build import program_policy, unit, verify
-
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +10,8 @@ from unittest import mock
 
 from package_fixtures import package_source
 
+from scripts.build_support import read_object
+from scripts.check_build import program_policy, unit, verify
 from scripts.package_build import package
 
 

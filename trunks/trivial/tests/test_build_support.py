@@ -1,15 +1,15 @@
+__all__ = [
+    "COMPONENT", "ENTRY", "build_folder", "json", "metadata", "mock", "target",
+]
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 import json
-from unittest import mock
-
-from scripts.build_support import COMPONENT, ENTRY, ROOT, build_folder, metadata, target
-
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from scripts.build_support import ROOT
+from scripts.build_support import COMPONENT, ENTRY, ROOT, build_folder, metadata, target
 
 
 class BuildMetadata(unittest.TestCase):

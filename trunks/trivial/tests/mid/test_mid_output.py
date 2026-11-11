@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_output as _support
-from test_output import (Output ,mock ,os ,signal)
+from test_output import Output, mock, os, signal
 
 
 class ForegroundOutput(_support.ForegroundOutput):

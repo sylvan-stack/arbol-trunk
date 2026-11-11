@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import test_build_commands as _support
 from test_build_commands import (
-    BuildCommands,
-    Path,
     ROOT,
+    Path,
     json,
     os,
     read_object,
@@ -13,7 +12,6 @@ from test_build_commands import (
     subprocess,
     sys,
     tempfile,
-    unittest,
 )
 
 

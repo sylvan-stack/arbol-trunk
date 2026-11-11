@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_repeat as _support
-from test_repeat import (FakeDatabase ,Path ,X ,asyncio ,root_lock ,subprocess ,sys ,time)
+from test_repeat import FakeDatabase, Path, X, asyncio, root_lock, subprocess, sys, time
 
 
 class Repeats(_support.Repeats):

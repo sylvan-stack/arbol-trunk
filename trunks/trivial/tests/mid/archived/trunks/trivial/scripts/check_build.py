@@ -1,18 +1,17 @@
 """Verify this package and run its checks with its own interpreter (TRV-0)."""
 
 from __future__ import annotations
-import pwd
-import unittest
-
 
 import argparse
 import ast
 import importlib
 import json
 import os
+import pwd
 import shlex
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 from typing import Any
 

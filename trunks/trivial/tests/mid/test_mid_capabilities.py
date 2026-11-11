@@ -2,7 +2,17 @@
 from __future__ import annotations
 
 import test_capabilities as _support
-from test_capabilities import (CapabilityError ,CapabilityStopped ,DriverRun ,asyncio ,capability_query ,json ,os ,patch ,time)
+from test_capabilities import (
+    CapabilityError,
+    CapabilityStopped,
+    DriverRun,
+    asyncio,
+    capability_query,
+    json,
+    os,
+    patch,
+    time,
+)
 
 
 class Capabilities(_support.Capabilities):

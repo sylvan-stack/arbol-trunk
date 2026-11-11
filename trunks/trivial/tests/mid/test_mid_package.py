@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_package as _support
-from test_package import (mock ,os ,package ,read_object ,subprocess ,target)
+from test_package import mock, os, package, read_object, subprocess, target
 
 
 class Packaging(_support.Packaging):

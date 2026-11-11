@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import test_database as _support
-from test_database import (DatabaseUnavailable ,asyncio ,conninfo ,database ,mock ,os ,postgres ,socket ,tempfile ,time)
+from test_database import DatabaseUnavailable, asyncio, conninfo, database, mock, os, postgres, socket, tempfile, time
 
 
 class Limit(_support.Limit):

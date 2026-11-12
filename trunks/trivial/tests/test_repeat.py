@@ -18,7 +18,7 @@ from fakes import FakeConnection, FakeDatabase
 from test_accept import CHAT, AcceptanceHome
 
 from arbol_trunk_trivial.accept import Exchange, Repeated, accept_message
-from arbol_trunk_trivial.claim import root_lock
+from arbol_trunk_trivial.claim import exchange_lock as root_lock
 from arbol_trunk_trivial.database import Acceptance, Accepted, DuplicateExchange, PriorExchange
 from arbol_trunk_trivial.errors import Refusal
 from arbol_trunk_trivial.folder import ExchangeFolder

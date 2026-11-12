@@ -1,5 +1,5 @@
 __all__ = [
-    "Refusal", "database_address", "find_root", "keychain_password", "role", "roots_folder", "security_stand_in",
+    "Refusal", "keychain_password", "security_stand_in",
 ]
 # Shared fixtures; case bodies live in top/ and mid/. See TESTS.md.
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from stand_ins import security_stand_in
 
 from arbol_trunk_trivial.errors import Refusal
-from arbol_trunk_trivial.root import database_address, find_root, keychain_password, role, roots_folder
+from arbol_trunk_trivial.root import keychain_password
 
 
 def write(path: Path, value: object) -> None:

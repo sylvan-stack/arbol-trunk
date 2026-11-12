@@ -19,14 +19,13 @@ from typing import Any
 from unittest import mock
 
 from audit import opened_files
-from fakes import FakeConnection, FakeDatabase
+from fakes import FakeConnection, FakeDatabase, unit_installation
 from stand_ins import security_stand_in, with_capabilities
 
 from arbol_trunk_trivial.command import handed, parse
 from arbol_trunk_trivial.database import RowRejected
 from arbol_trunk_trivial.events import EventsFile
 from arbol_trunk_trivial.folder import ExchangeFolder
-from arbol_trunk_trivial.root import roots_folder
 from arbol_trunk_trivial.rows import MessageRow, Row
 from arbol_trunk_trivial.run import Output, run_exchange
 from arbol_trunk_trivial.settings import settings_file
@@ -81,11 +80,8 @@ class WholeExchange(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.home = Path(os.path.realpath(folder.name))
-        self.root = roots_folder(self.home) / "rct"
-        (self.root / "exchanges").mkdir(parents=True)
-        (self.root / "root.json").write_text(json.dumps({"database": "arbol_rct", "rootContract": 1}))
-        (self.home / ".arbol").mkdir()
-        (self.home / ".arbol" / "database.json").write_text(json.dumps({"address": "postgresql://rct@%2Ftmp%2Fx"}))
+        self.installation = unit_installation(self.home)
+        self.root = self.installation.runtime
         self.security = str(security_stand_in(self.home, status=44))
         self.bin = self.home / "bin"
         self.bin.mkdir()
@@ -112,8 +108,8 @@ class WholeExchange(unittest.TestCase):
         environment = {"STANDIN_LOG": str(self.log), "STANDIN_EVENTS": str(self.log / "events.jsonl"),
                        "ARBOL_TEST_TIME_SCALE": "10"}
         with mock.patch.dict("os.environ", environment):
-            prepared = prepare(handed(parse(["--root", "rct", "run", "--request", str(file), *args]),
-                                      started_in=str(self.work)), self.home, self.security)
+            prepared = prepare(handed(parse(["run", "--request", str(file), *args]),
+                                      started_in=str(self.work)), self.installation)
 
             async def go() -> int:
                 beside = asyncio.ensure_future(during()) if during is not None else None

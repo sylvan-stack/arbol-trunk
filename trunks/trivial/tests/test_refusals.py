@@ -4,7 +4,7 @@
 own, a stand-in `security`, a stand-in launcher and the fake database: no database server, no Driver and no network."""
 
 __all__ = [
-    "ROOT_CONTRACTS", "ROUTE", "security_stand_in", "settings_file", "time",
+    "ROUTE", "security_stand_in", "settings_file", "time",
 ]
 
 import asyncio
@@ -19,12 +19,11 @@ from typing import Any
 from unittest import mock
 
 import fakes
-from fakes import FakeDatabase
+from fakes import FakeDatabase, unit_installation
 from stand_ins import security_stand_in, with_capabilities
 
 from arbol_trunk_trivial.cli import start
 from arbol_trunk_trivial.database import Acceptance, Accepted, Connect, Connection
-from arbol_trunk_trivial.root import ROOT_CONTRACTS, roots_folder
 from arbol_trunk_trivial.run import Output
 from arbol_trunk_trivial.settings import settings_file
 from arbol_trunk_trivial.start import Prepared
@@ -47,12 +46,9 @@ class StartTest(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.home = Path(os.path.realpath(folder.name))
-        self.root = roots_folder(self.home) / "rct"
-        self.exchanges = self.root / "exchanges"
-        self.exchanges.mkdir(parents=True)
-        self.root_json({"database": "arbol_rct", "rootContract": 1})
-        (self.home / ".arbol").mkdir()
-        (self.home / ".arbol" / "database.json").write_text(json.dumps({"address": "postgresql://rct@%2Ftmp%2Fx"}))
+        self.installation = unit_installation(self.home)
+        self.root = self.installation.runtime
+        self.exchanges = self.installation.exchanges
         self.security = security_stand_in(self.home, status=44)
         self.bin = self.home / "bin"
         self.bin.mkdir()
@@ -81,7 +77,7 @@ class StartTest(unittest.TestCase):
 
         with mock.patch.dict("os.environ", {"STANDIN_LOG": str(self.home), "ARBOL_TEST_TIME_SCALE": "10"}):
             status = asyncio.run(start(
-                ["--root", root, command, *request_args, *args], home=self.home,
+                [command, *request_args, *args], home=self.home,
                 started=time.monotonic() if started is None else started, connector=connector,
                 security=str(self.security), started_in=str(self.work), output=Output(lines.append),
                 search_path=f"{self.bin}:/usr/bin:/bin"))

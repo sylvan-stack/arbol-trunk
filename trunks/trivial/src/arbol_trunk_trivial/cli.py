@@ -44,7 +44,8 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
         context = installation(home)
         if command.operation == "settle":
             return await settle_exchange(context, command.options["--exchange"], output=output,
-                                         security=security, connect=settle_connect, compatibility=compatibility)
+                                         security=security, connect=settle_connect, build=build,
+                                         compatibility=compatibility)
         if connector is None:
             connect = installed_postgres(context, security, compatibility)
             deadline = started + ACCEPTANCE_SECONDS

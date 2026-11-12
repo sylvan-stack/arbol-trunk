@@ -94,6 +94,8 @@ class Accepted:
 class StoredExchange:
     state: str
     accepted_at: datetime
+    ended_at: datetime | None = None
+    error: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -382,9 +384,9 @@ class PostgresConnection:
 
     async def exchange_state(self, exchange: str) -> StoredExchange | None:
         async with self.connection.cursor() as cursor:
-            await within_limit(cursor.execute("SELECT state, accepted_at FROM exchanges WHERE id = %s", (exchange,)))
+            await within_limit(cursor.execute("SELECT state, accepted_at, ended_at, error FROM exchanges WHERE id = %s", (exchange,)))
             found = await cursor.fetchone()
-        return StoredExchange(str(found[0]), found[1]) if found is not None else None
+        return StoredExchange(str(found[0]), found[1], found[2], found[3]) if found is not None else None
 
     async def lock_exchange(self, exchange: str) -> None:
         # Also used by the runtime before declaring an interrupted acceptance absent.
@@ -414,9 +416,11 @@ class PostgresConnection:
         """One transaction: the rows not yet saved, and the final state, changing the Exchange only while it is open
         (RCT-2.20)."""
         async with transaction(self.connection), self.connection.cursor() as cursor:
-            await within_limit(cursor.execute("SELECT replaced_by FROM exchanges WHERE id = %s FOR UPDATE", (exchange,)))
+            await within_limit(cursor.execute("SELECT replaced_by, state FROM exchanges WHERE id = %s FOR UPDATE", (exchange,)))
             found = await cursor.fetchone()
-            replaced = found is not None and found[0] is not None
+            if found is None or found[1] != "open":
+                return
+            replaced = found[0] is not None
             for row in tuple(rows):
                 if replaced and not isinstance(row, RunRow):
                     continue

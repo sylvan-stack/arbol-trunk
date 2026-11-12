@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .accept import ACCEPTANCE_SECONDS, Repeated, find_prior
+from .admission import GENERATION_ENV, Admission
 from .build import BuildRecordError, build_info
 from .command import UUID, handed, parse
 from .database import Connect, installed_postgres, preflight
@@ -46,20 +47,24 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
             return await settle_exchange(context, command.options["--exchange"], output=output,
                                          security=security, connect=settle_connect, build=build,
                                          compatibility=compatibility)
-        if connector is None:
-            connect = installed_postgres(context, security, compatibility)
-            deadline = started + ACCEPTANCE_SECONDS
-            await preflight(connect, deadline)
-            exchange = command.options.get("--exchange")
-            if exchange is not None and UUID.fullmatch(exchange):
-                prior = await find_prior(connect, exchange, deadline)
-                if prior is not None:
-                    raise Repeated(prior)
-        prepared = prepare(handed(command, started_in), context)
-        if connector is not None:
-            connect = connector(prepared)
-        private_directory(context.runtime)
-        private_directory(context.exchanges)
+        with Admission(context.runtime).lease("normal", generation=os.environ.get(GENERATION_ENV)) as lease:
+            if connector is None:
+                connect = installed_postgres(context, security, compatibility, lease=lease)
+                deadline = started + ACCEPTANCE_SECONDS
+                await preflight(connect, deadline)
+                exchange = command.options.get("--exchange")
+                if exchange is not None and UUID.fullmatch(exchange):
+                    prior = await find_prior(connect, exchange, deadline)
+                    if prior is not None:
+                        raise Repeated(prior)
+            prepared = prepare(handed(command, started_in), context)
+            if connector is not None:
+                connect = connector(prepared)
+            private_directory(context.runtime)
+            private_directory(context.exchanges)
+            process = {"pid": os.getpid(), "startedAt": started_at()}
+            return await run_exchange(prepared, connect, build=build, process=process, started=started,
+                                      output=output, search_path=search_path)
     except Repeated as repeated:
         output.line(repeated.line)
         return 0
@@ -69,9 +74,7 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
     except Refusal as refusal:
         output.line(refusal.line())
         return 1
-    process = {"pid": os.getpid(), "startedAt": started_at()}
-    return await run_exchange(prepared, connect, build=build, process=process, started=started,
-                              output=output, search_path=search_path)
+
 
 
 def main(args: list[str]) -> int:

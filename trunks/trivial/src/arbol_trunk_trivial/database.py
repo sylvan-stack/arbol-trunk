@@ -20,6 +20,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
 from . import NAME
+from .admission import DATABASE_WRITER_LOCK, Lease
 from .build import Compatibility
 from .errors import Refusal
 from .history import HistoryRow
@@ -239,7 +240,8 @@ class SchemaGuard:
         return revision, version
 
 
-def installed_postgres(context: Installation, security: str, compatibility: Compatibility) -> Connect:
+def installed_postgres(context: Installation, security: str, compatibility: Compatibility,
+                       *, lease: Lease | None = None) -> Connect:
     """Use the same explicit target as status, with credentials scoped to libpq."""
     target = context.target
     password = None if target.socket else keychain_password(target.account, security)
@@ -251,7 +253,7 @@ def installed_postgres(context: Installation, security: str, compatibility: Comp
                          client_encoding="UTF8", connect_timeout=int(CALL_SECONDS), application_name=NAME,
                          options=f"-csearch_path=public -cstatement_timeout={int(CALL_SECONDS * 1000)}")
     manifest = context.bin_dir / ".arbol-builds/schema/migrations.toml"
-    return postgres(info, guard=SchemaGuard(target.name, release_history(manifest), compatibility))
+    return postgres(info, guard=SchemaGuard(target.name, release_history(manifest), compatibility), lease=lease)
 
 
 async def preflight(connect: Connect, deadline: float) -> None:
@@ -319,15 +321,47 @@ SELECT e.number, t.position, e.replaced_by IS NOT NULL, NULL, NULL,
 
 
 class PostgresConnection:
-    def __init__(self, connection: psycopg.AsyncConnection[Any]) -> None:
+    def __init__(self, connection: psycopg.AsyncConnection[Any], guard: SchemaGuard | None = None,
+                 lease: Lease | None = None) -> None:
         self.connection = connection
+        self.guard = guard
+        self.lease = lease
+
+    def require_lease(self) -> None:
+        if self.lease is not None:
+            try:
+                self.lease.require()
+            except Refusal as error:
+                raise SchemaRefusal(error.code, str(error)) from None
+
+    async def admit(self) -> None:
+        if self.lease is None:
+            return
+        self.require_lease()
+        raw = self.connection
+        source = self.lease.state.source
+        # Register on the server before sending any statement that could write.
+        # This lease survives a lost client long enough to finish server work.
+        cursor = await within_limit(raw.execute("SELECT pg_try_advisory_lock_shared(%s::bigint)",
+                                                (DATABASE_WRITER_LOCK,)))
+        if await within_limit(cursor.fetchone()) != (True,):
+            raise SchemaRefusal("maintenance", "PostgreSQL is fenced for migration.")
+        cursor = await within_limit(raw.execute(
+            "SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()"))
+        if (raw.info.host != source["host"] or raw.info.port != source["port"]
+                or raw.info.dbname != source["database"]
+                or await within_limit(cursor.fetchone()) != (source["databaseOid"],)):
+            raise SchemaRefusal("maintenance", "The configured database does not match the writer admission target.")
 
     async def accept(self, acceptance: Acceptance) -> Accepted:
         """One transaction: the chat with an insert that does nothing when it is there, the open Exchange with the
         next number in its chat, the message at position 0, and the history of the chat (RCT-2, TRV-D3)."""
         a = acceptance
+        self.require_lease()
         try:
             async with transaction(self.connection, acceptance=True), self.connection.cursor() as cursor:
+                if self.guard is not None:
+                    await self.guard.require(self.connection)
                 await self.lock_exchange(a.exchange)
                 await within_limit(cursor.execute(
                     "INSERT INTO chats (id, created_at) VALUES (%s, %s) ON CONFLICT DO NOTHING",
@@ -457,13 +491,14 @@ class PostgresConnection:
             pass
 
 
-def postgres(info: str, *, guard: SchemaGuard | None = None) -> Connect:
-    """What connects to the Root's database, each time it is called on a new connection."""
+def postgres(info: str, *, guard: SchemaGuard | None = None, lease: Lease | None = None) -> Connect:
+    """Verify each newly opened production connection before handing it to a writer."""
 
     async def connect() -> Connection:
         raw = await within_limit(psycopg.AsyncConnection.connect(info, autocommit=True))
-        connection = PostgresConnection(raw)
+        connection = PostgresConnection(raw, guard, lease)
         try:
+            await connection.admit()
             if guard is not None:
                 await guard.require(raw)
         except BaseException:

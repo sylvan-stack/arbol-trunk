@@ -32,3 +32,7 @@ Source remains available; writing or running these checks requires a separate te
 ## Separate testing and low-tier history — SYL-330
 
 All test work, including top tier, belongs to a separate task explicitly requested by the owner. Only the owner decides when implementation is ready for tests. Previous low-tier removals are preserved as commented file-end examples, with reasons and source revisions in [the inventory](docs/test-inventory.md#commented-low-tier-source--syl-330). They add no retained mid-tier cases and must not be enabled or recreated.
+
+## ASD-14 chat identity selection
+
+`test_mid_chat_identity.ChatIdentity.test_accepted_chat_survives_continuation_replacement_and_driver_selection` is one retained mid-tier journey. Wrong accepted chat ownership can book work under another chat or send identity markers to a strict incompatible Driver. Observes a real recording child process after first-message acceptance, continuation and replacement, including default Claude, explicit Codex and marker-free Pi/MiMo. Unlike the archived request dictionary cases, the oracle is the independently accepted database chat and the request actually delivered at process launch. It requires the exact selector; it is separate from the top-tier Build gate.

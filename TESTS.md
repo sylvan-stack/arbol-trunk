@@ -8,7 +8,7 @@ Reviewed revision: `d05362c865f8aea86b162c1f7a275c552f48ed43` under SYL-327 (29 
 
 ## Selection and limits
 
-3 top-tier inventory entries and 18 mid-tier entries are available after the higher-bar review. 222 low-tier entries were removed under SYL-327. Definitions, scenarios, programs and entry points overlap; this is not a runtime suite count. Top-tier bodies are unchanged. Retained mid-tier sources remain uncommented.
+3 top-tier inventory entries and 19 mid-tier entries are available after the higher-bar review. 222 low-tier entries were removed under SYL-327. Definitions, scenarios, programs and entry points overlap; this is not a runtime suite count. Top-tier bodies are unchanged. Retained mid-tier sources remain uncommented.
 
 ## Active top tier
 
@@ -69,3 +69,5 @@ test work; a testing request alone does not make low-tier cases useful.
 Live gates use a real existing provider profile and Subscription ID directly. The default Claude selection is the existing `anthropic` record in the native Driver state directory `~/Library/Application Support/Arbol/drivers/claude`. `ARBOL_BUILD_LIVE_SUBSCRIPTION` selects an existing real ID. The historical environment name `ARBOL_BUILD_TEST_STATE_DIR` remains an override for an existing real Driver state directory. Missing, signed-out and test-* selections refuse before inference. Qualification never creates a profile, aliases one, copies authentication or starts sign-in.
 
 The real profile retains its native credential binding and normal vendor behavior. Application databases, runtime and Build registry remain disposable. Full Build gates, real inference and actual completion and usage observations remain required. Earlier test-profile records keep their historical scope.
+
+ASD-14 adds one mid-tier identity journey: `PYTHONPATH=src:tests:tests/mid uv run --no-sync python -m unittest test_mid_chat_identity.ChatIdentity.test_accepted_chat_survives_continuation_replacement_and_driver_selection` from `trunks/trivial`. It uses disposable installation/database fixtures and recording Driver stand-ins, with no provider profile provisioning or inference. Its accepted UUID is compared at the actual launch boundary.

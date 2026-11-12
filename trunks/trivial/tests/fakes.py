@@ -1,13 +1,17 @@
-"""A fake of the Root's database for the unit tests: no server, no network."""
+"""Private installation and in-memory database for the Trivial unit cases."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+from arbol_trunk_trivial.admission import DIRECTORY, GATE, OWNER, STATE, WRITERS, runtime_folder
 from arbol_trunk_trivial.database import (
     Acceptance,
     Accepted,
@@ -22,7 +26,24 @@ from arbol_trunk_trivial.database import (
     checked_replacement,
 )
 from arbol_trunk_trivial.history import HistoryRow
+from arbol_trunk_trivial.root import Installation, InstalledDatabase
 from arbol_trunk_trivial.rows import MessageRow, Row, RunRow, ToolCallRow
+
+
+def unit_installation(home: Path) -> Installation:
+    """Give the real file locks a private installation; the database is injected."""
+    runtime, bin_dir, socket = runtime_folder(home), home / ".local/bin", home / "unused-socket"
+    for folder in (runtime, bin_dir, socket, runtime / "exchanges", runtime / DIRECTORY):
+        folder.mkdir(parents=True, mode=0o700)
+    target = InstalledDatabase("arbol_test", str(socket), 5432, "fixture", True)
+    state = {"format": 1, "state": "normal", "generation": "a" * 32, "release": "b" * 64, "session": None,
+             "source": {"host": target.host, "port": target.port, "database": target.name, "databaseOid": 1}}
+    for name in (GATE, WRITERS, OWNER, STATE):
+        fd = os.open(runtime / DIRECTORY / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            if name == STATE:
+                json.dump(state, stream)
+    return Installation(home, runtime, bin_dir, target)
 
 
 @dataclass
@@ -83,7 +104,8 @@ class FakeConnection:
     async def exchange_state(self, exchange: str) -> StoredExchange | None:
         await self._call()
         found = self.database.exchanges.get(exchange)
-        return StoredExchange(found.state, found.accepted_at) if found is not None else None
+        return (StoredExchange(found.state, found.accepted_at, found.ended_at, found.error)
+                if found is not None else None)
 
     async def find_exchange(self, exchange: str) -> PriorExchange | None:
         await self._call()

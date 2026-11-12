@@ -13,7 +13,7 @@ from .settings import default_driver
 @dataclass(frozen=True)
 class Prepared:
     handed: Handed
-    root: Installation
+    installation: Installation
     driver: str  # the route's driver, else the one the settings file names
 
 

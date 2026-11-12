@@ -20,6 +20,7 @@ from .claim import claim_folder
 from .clock import iso
 from .database import (
     Acceptance,
+    AcceptanceUncertain,
     Accepted,
     ChatBusy,
     Connect,
@@ -29,9 +30,10 @@ from .database import (
     PriorExchange,
     Replacement,
     ReplacementRefused,
+    SchemaRefusal,
 )
 from .errors import Refusal, invalid
-from .folder import ExchangeFolder
+from .folder import EXCHANGE_FORMAT, ExchangeFolder
 from .history import make_history
 from .start import Prepared
 
@@ -41,8 +43,8 @@ ACCEPTANCE_SECONDS = 10.0  # from the start; not divided by ARBOL_TEST_TIME_SCAL
 class Repeated(Exception):
     """An already-accepted identifier: return its acceptance and start no work."""
 
-    def __init__(self, root: str, prior: PriorExchange) -> None:
-        self.line = acceptance_line(root=root, exchange=prior.exchange, chat=prior.chat, number=prior.number,
+    def __init__(self, prior: PriorExchange) -> None:
+        self.line = acceptance_line(exchange=prior.exchange, chat=prior.chat, number=prior.number,
                                     build=prior.build, trunk=prior.trunk, duplicate=True)
 
 
@@ -56,6 +58,8 @@ async def find_prior(connect: Connect, exchange: str, deadline: float) -> PriorE
 
     try:
         return await asyncio.wait_for(work(), max(deadline - time.monotonic(), 0))
+    except SchemaRefusal as error:
+        raise error.refusal() from None
     except (DatabaseUnavailable, TimeoutError):
         raise Refusal("database_unavailable", "The database did not finish the identifier lookup within 10 seconds.") from None
     finally:
@@ -85,13 +89,18 @@ async def accept_in_database(connect: Connect, acceptance: Acceptance,
     except ReplacementRefused as error:
         await _close(connection)
         raise Refusal(error.code, str(error)) from None
-    except TimeoutError:
+    except AcceptanceUncertain:
         await _close(connection)
-        raise Refusal("database_unavailable", f"The database did not accept the message within "
-                                              f"{ACCEPTANCE_SECONDS:g} seconds of the start.") from None
-    except DatabaseUnavailable as error:
+        raise Refusal("no_answer", "The database did not confirm acceptance. Recover it by Exchange UUID.") from None
+    except SchemaRefusal as error:
         await _close(connection)
-        raise Refusal("database_unavailable", f"The database cannot be reached: {error}") from None
+        raise error.refusal() from None
+    except (DatabaseUnavailable, TimeoutError):
+        await _close(connection)
+        raise Refusal("database_unavailable", "The database could not accept the Exchange within its time limit.") from None
+    except BaseException:
+        await _close(connection)
+        raise
 
 
 async def _close(connection: Connection | None) -> None:
@@ -117,10 +126,10 @@ async def find_replacement(connect: Connect, exchange: str, deadline: float) -> 
         await _close(connection)
 
 
-def acceptance_line(*, root: str, exchange: str, chat: str, number: int, build: str, duplicate: bool = False,
+def acceptance_line(*, exchange: str, chat: str, number: int, build: str, duplicate: bool = False,
                      trunk: str = CODE_NAME) -> str:
     """The one line that says the message was accepted (RCT-2, Accepted)."""
-    return json.dumps({"accepted": True, "duplicate": duplicate, "root": root, "exchange": exchange, "chat": chat,
+    return json.dumps({"accepted": True, "duplicate": duplicate, "exchange": exchange, "chat": chat,
                        "number": number, "trunk": trunk, "build": build}, separators=(",", ":"))
 
 
@@ -145,7 +154,7 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
     if handed.exchange is not None:
         prior = await find_prior(connect, handed.exchange, started + ACCEPTANCE_SECONDS)
         if prior is not None:
-            raise Repeated(prepared.root.identifier, prior)
+            raise Repeated(prior)
     if handed.replaces is not None:
         try:
             replacement = await find_replacement(connect, handed.replaces, started + ACCEPTANCE_SECONDS)
@@ -153,7 +162,7 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
             if handed.exchange is not None:
                 prior = await find_prior(connect, handed.exchange, started + ACCEPTANCE_SECONDS)
                 if prior is not None:
-                    raise Repeated(prepared.root.identifier, prior) from None
+                    raise Repeated(prior) from None
             raise
         if handed.chat is not None and handed.chat != replacement.chat:
             raise invalid("The handed chat differs from the replaced Exchange's chat.")
@@ -163,7 +172,7 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
         assert handed.message is not None  # handed() refuses a missing message
         message = handed.message
     exchange = handed.exchange or str(uuid.uuid4())
-    record: dict[str, Any] = {"rootContract": prepared.root.root_contract, "root": prepared.root.identifier,
+    record: dict[str, Any] = {"exchangeFormat": EXCHANGE_FORMAT,
                               "exchange": exchange, "chat": chat, "trunk": CODE_NAME, "build": build,
                               "process": process, "route": handed.route}
     if handed.small_call_route is not None:
@@ -171,12 +180,12 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
     record["workingFolder"] = handed.working_folder
     record["signsOfLife"] = {"heartbeat": 0, "waitingFor": "database", "since": iso()}
     try:
-        folder = await claim_folder(prepared.root.exchanges, exchange, record, started + ACCEPTANCE_SECONDS)
+        folder = await claim_folder(prepared.installation.exchanges, exchange, record, started + ACCEPTANCE_SECONDS)
     except Refusal as refusal:
         if handed.exchange is not None and refusal.code == "in_progress":
             prior = await find_prior(connect, handed.exchange, started + ACCEPTANCE_SECONDS)
             if prior is not None:
-                raise Repeated(prepared.root.identifier, prior) from None
+                raise Repeated(prior) from None
         raise
     accepted_at = datetime.now(UTC)
     try:
@@ -185,12 +194,16 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
             handed.working_folder, accepted_at, handed.replaces), started + ACCEPTANCE_SECONDS)
     except DuplicateExchange as duplicate:
         folder.discard()
-        raise Repeated(prepared.root.identifier, duplicate.prior) from None
-    except BaseException:
-        folder.discard()
+        raise Repeated(duplicate.prior) from None
+    except Refusal as error:
+        if error.code != "no_answer":
+            folder.discard()
         raise
-    folder.update(acceptedAt=iso(accepted_at))
-    line = acceptance_line(root=prepared.root.identifier, exchange=exchange, chat=chat, number=accepted.number,
-                           build=build)
+    try:
+        folder.update(acceptedAt=iso(accepted_at))
+    except OSError:
+        await _close(connection)
+        raise Refusal("no_answer", "The Exchange folder could not be updated. Recover acceptance by UUID.") from None
+    line = acceptance_line(exchange=exchange, chat=chat, number=accepted.number, build=build)
     return Exchange(folder, connection, chat, accepted.number, message,
                     make_history(accepted.history, before=accepted.number), line)

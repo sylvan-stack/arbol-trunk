@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .build import Compatibility, build_info
-from .claim import root_lock
+from .claim import exchange_lock
 from .database import (
     Connect,
     Connection,
@@ -153,7 +153,7 @@ async def settle_exchange(context: Installation, exchange: str, *, output: Outpu
         if connect is None:
             connect = installed_postgres(context, security, build_info()[1] if compatibility is None else compatibility)
             await preflight(connect, deadline)
-        async with root_lock(context.exchanges, deadline):
+        async with exchange_lock(context.exchanges, deadline):
             if (context.exchanges / exchange).exists():
                 state = await _settle_locked(context, exchange, security=security, connect=connect,
                                              deadline=deadline)

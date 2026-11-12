@@ -34,6 +34,10 @@ class DatabaseUnavailable(Exception):
     """A call to the database failed or did not end within its limit; the connection is given up."""
 
 
+class AcceptanceUncertain(DatabaseUnavailable):
+    """Acceptance reached COMMIT, whose outcome could not be confirmed."""
+
+
 class SchemaRefusal(DatabaseUnavailable):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -278,7 +282,7 @@ async def within_limit[T](call: Awaitable[T]) -> T:
 
 
 @asynccontextmanager
-async def transaction(connection: psycopg.AsyncConnection[Any]) -> AsyncIterator[None]:
+async def transaction(connection: psycopg.AsyncConnection[Any], *, acceptance: bool = False) -> AsyncIterator[None]:
     """Bound transaction commands too: BEGIN, SAVEPOINT, rollback and COMMIT can each lose the server."""
     work = connection.transaction()
     await within_limit(work.__aenter__())
@@ -288,7 +292,12 @@ async def transaction(connection: psycopg.AsyncConnection[Any]) -> AsyncIterator
         await within_limit(work.__aexit__(type(error), error, error.__traceback__))
         raise
     else:
-        await within_limit(work.__aexit__(None, None, None))
+        try:
+            await within_limit(work.__aexit__(None, None, None))
+        except (DatabaseUnavailable, asyncio.CancelledError) as error:
+            if acceptance:
+                raise AcceptanceUncertain() from error
+            raise
 
 
 BUSY = ("exchanges_one_open_per_chat", "exchanges_chat_id_number_key")
@@ -316,7 +325,8 @@ class PostgresConnection:
         next number in its chat, the message at position 0, and the history of the chat (RCT-2, TRV-D3)."""
         a = acceptance
         try:
-            async with transaction(self.connection), self.connection.cursor() as cursor:
+            async with transaction(self.connection, acceptance=True), self.connection.cursor() as cursor:
+                await self.lock_exchange(a.exchange)
                 await within_limit(cursor.execute(
                     "INSERT INTO chats (id, created_at) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                     (a.chat, a.accepted_at)))
@@ -376,11 +386,17 @@ class PostgresConnection:
             found = await cursor.fetchone()
         return StoredExchange(str(found[0]), found[1]) if found is not None else None
 
+    async def lock_exchange(self, exchange: str) -> None:
+        # Also used by the runtime before declaring an interrupted acceptance absent.
+        await within_limit(self.connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (exchange,)))
+
     async def find_exchange(self, exchange: str) -> PriorExchange | None:
-        async with self.connection.cursor() as cursor:
+        async with transaction(self.connection), self.connection.cursor() as cursor:
+            await self.lock_exchange(exchange)
             await within_limit(cursor.execute("SELECT id::text, chat_id::text, number, trunk, build"
                                               " FROM exchanges WHERE id = %s", (exchange,)))
-            found = await cursor.fetchone()
+            found = await within_limit(cursor.fetchone())
         return PriorExchange(str(found[0]), str(found[1]), int(found[2]), str(found[3]), str(found[4])) if found else None
 
     async def replacement(self, exchange: str) -> Replacement:

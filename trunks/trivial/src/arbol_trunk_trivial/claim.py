@@ -22,9 +22,9 @@ START_AGE_SECONDS = 15.0  # an abandoned start is not removed before the longest
 
 
 @asynccontextmanager
-async def root_lock(exchanges: Path, deadline: float) -> AsyncIterator[None]:
+async def exchange_lock(exchanges: Path, deadline: float) -> AsyncIterator[None]:
     try:
-        descriptor = os.open(exchanges, os.O_RDONLY)
+        descriptor = os.open(exchanges, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as error:
         raise Refusal("trunk_failed", f"The Exchange folders cannot be coordinated: {error.strerror}.") from None
     try:
@@ -43,8 +43,11 @@ async def root_lock(exchanges: Path, deadline: float) -> AsyncIterator[None]:
 
 
 def stale_folders(exchanges: Path, exchange: str) -> list[Path]:
+    # A published folder may correspond to a committed acceptance even without acceptedAt.
+    if os.path.lexists(exchanges / exchange):
+        raise Refusal("in_progress", "This Exchange has a published record. Recover or settle it before retrying.")
     stale: list[Path] = []
-    for path in (exchanges / exchange, exchanges / f".{exchange}.new"):
+    for path in (exchanges / f".{exchange}.new",):
         try:
             info = path.stat(follow_symlinks=False)
         except FileNotFoundError:
@@ -65,7 +68,7 @@ def stale_folders(exchanges: Path, exchange: str) -> list[Path]:
 
 
 async def claim_folder(exchanges: Path, exchange: str, record: dict[str, Any], deadline: float) -> ExchangeFolder:
-    async with root_lock(exchanges, deadline):
+    async with exchange_lock(exchanges, deadline):
         try:
             for path in stale_folders(exchanges, exchange):
                 shutil.rmtree(path)

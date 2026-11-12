@@ -16,9 +16,9 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .accept import ACCEPTANCE_SECONDS
+from .accept import ACCEPTANCE_SECONDS, Repeated, find_prior
 from .build import BuildRecordError, build_info
-from .command import handed, parse
+from .command import UUID, handed, parse
 from .database import Connect, installed_postgres, preflight
 from .detach import lead_process_group
 from .errors import Refusal
@@ -45,14 +45,23 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
         if command.operation == "settle":
             return await settle_exchange(context, command.options["--exchange"], output=output,
                                          security=security, connect=settle_connect, compatibility=compatibility)
-        prepared = prepare(handed(command, started_in), context)
         if connector is None:
             connect = installed_postgres(context, security, compatibility)
-            await preflight(connect, started + ACCEPTANCE_SECONDS)
-        else:
+            deadline = started + ACCEPTANCE_SECONDS
+            await preflight(connect, deadline)
+            exchange = command.options.get("--exchange")
+            if exchange is not None and UUID.fullmatch(exchange):
+                prior = await find_prior(connect, exchange, deadline)
+                if prior is not None:
+                    raise Repeated(prior)
+        prepared = prepare(handed(command, started_in), context)
+        if connector is not None:
             connect = connector(prepared)
         private_directory(context.runtime)
         private_directory(context.exchanges)
+    except Repeated as repeated:
+        output.line(repeated.line)
+        return 0
     except BuildRecordError as error:
         output.line(Refusal("trunk_failed", str(error)).line())
         return 1

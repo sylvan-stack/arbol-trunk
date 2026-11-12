@@ -78,10 +78,6 @@ class Installation:
     def exchanges(self) -> Path:
         return self.runtime / "exchanges"
 
-    # Compatibility with the acceptance code until the versioned record lands.
-    identifier = ""
-    root_contract = 1
-
 
 def installation(home: Path) -> Installation:
     target = installed_database(home)

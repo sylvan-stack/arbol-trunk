@@ -138,7 +138,7 @@ async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, ma
             return cancelled()
         try:
             await life.wait(capabilities(launcher, prepared.driver, prepared.handed.route.get("subscription"),
-                                         prepared.handed.working_folder, prepared.root.home,
+                                         prepared.handed.working_folder, prepared.installation.home,
                                          lambda: any(line.kind == "stop" for line in control.read())), "driver")
             if life.error is not None:
                 return folder_failed(life.error)

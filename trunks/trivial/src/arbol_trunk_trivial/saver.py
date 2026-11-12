@@ -73,3 +73,9 @@ class Saver:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+
+    async def close(self) -> None:
+        try:
+            await self.stop()
+        finally:
+            await self.give_up_connection()

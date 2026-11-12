@@ -243,6 +243,9 @@ class SchemaGuard:
 def installed_postgres(context: Installation, security: str, compatibility: Compatibility,
                        *, lease: Lease | None = None) -> Connect:
     """Use the same explicit target as status, with credentials scoped to libpq."""
+    if lease is None:
+        raise Refusal("maintenance", "No installation writer permit was supplied.")
+    lease.require()
     target = context.target
     password = None if target.socket else keychain_password(target.account, security)
     if "PGSERVICE" in os.environ or (not target.socket and not password):
@@ -342,7 +345,7 @@ class PostgresConnection:
         source = self.lease.state.source
         # Register on the server before sending any statement that could write.
         # This lease survives a lost client long enough to finish server work.
-        cursor = await within_limit(raw.execute("SELECT pg_try_advisory_lock_shared(%s::bigint)",
+        cursor = await within_limit(raw.execute("SELECT pg_catalog.pg_try_advisory_lock_shared(%s::bigint)",
                                                 (DATABASE_WRITER_LOCK,)))
         if await within_limit(cursor.fetchone()) != (True,):
             raise SchemaRefusal("maintenance", "PostgreSQL is fenced for migration.")
@@ -408,6 +411,7 @@ class PostgresConnection:
 
     async def save(self, row: Row) -> None:
         """One row, with an insert that does nothing when it is there, in a transaction of its own."""
+        self.require_lease()
         sql, params = row.statement()
         try:
             await within_limit(self.connection.execute(sql, params))
@@ -449,6 +453,7 @@ class PostgresConnection:
                   error: dict[str, Any] | None, *, end_written: bool = True) -> None:
         """One transaction: the rows not yet saved, and the final state, changing the Exchange only while it is open
         (RCT-2.20)."""
+        self.require_lease()
         async with transaction(self.connection), self.connection.cursor() as cursor:
             await within_limit(cursor.execute("SELECT replaced_by, state FROM exchanges WHERE id = %s FOR UPDATE", (exchange,)))
             found = await cursor.fetchone()
@@ -507,3 +512,24 @@ def postgres(info: str, *, guard: SchemaGuard | None = None, lease: Lease | None
         return connection
 
     return connect
+
+
+
+@asynccontextmanager
+async def writer_connections(connect: Connect) -> AsyncIterator[Connect]:
+    """Close any leftover writing connection before its enclosing file lease ends."""
+    opened: set[PostgresConnection] = set()
+
+    async def tracked() -> Connection:
+        connection = await connect()
+        opened.difference_update([old for old in opened if old.connection.closed])
+        if isinstance(connection, PostgresConnection):
+            opened.add(connection)
+        return connection
+
+    try:
+        yield tracked
+    finally:
+        for connection in opened:
+            if not connection.connection.closed:
+                await connection.close()

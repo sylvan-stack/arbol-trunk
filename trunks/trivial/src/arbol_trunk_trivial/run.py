@@ -22,7 +22,7 @@ from typing import Any
 from .accept import Exchange, Repeated, accept_message
 from .clock import UPTIME, Clock, scaled
 from .control import ControlFile
-from .database import Connect
+from .database import Connect, writer_connections
 from .detach import detach
 from .driver import CapabilityError, CapabilityStopped, Driver, DriverRun, capabilities, find_launcher, launcher_name
 from .end import End, cancelled, end_of_run, failed, save_end, write_end
@@ -46,30 +46,31 @@ async def run_exchange(prepared: Prepared, connect: Connect, *, build: str, proc
                        started: float, output: Output | None = None, search_path: str | None = None) -> int:
     """Accepts the message, says so on standard output, and runs the Exchange to its end. The exit status is 0 for
     completed, 1 for failed or refused, 2 for cancelled (RCT-2)."""
-    output = output or Output()
-    life = SignsOfLife()
-    watch = Watch(life)
-    watch.start()
-    try:
+    async with writer_connections(connect) as connect:
+        output = output or Output()
+        life = SignsOfLife()
+        watch = Watch(life)
+        watch.start()
         try:
-            exchange = await life.wait(accept_message(prepared, connect, build=build, process=process,
-                                                       started=started), "database")
-        except Repeated as repeated:
-            output.line(repeated.line)
-            return 0
-        except Refusal as refusal:
-            output.line(refusal.line())
-            return 1
-        life.bind(exchange.folder)
-        life.beat("database")
-        output.line(exchange.line)
-        if prepared.handed.detach:
-            detach()
-            output.broken = True
-        end = await run_accepted(prepared, connect, exchange, search_path, output, life=life)
-        return end.exit_status
-    finally:
-        watch.close()
+            try:
+                exchange = await life.wait(accept_message(prepared, connect, build=build, process=process,
+                                                           started=started), "database")
+            except Repeated as repeated:
+                output.line(repeated.line)
+                return 0
+            except Refusal as refusal:
+                output.line(refusal.line())
+                return 1
+            life.bind(exchange.folder)
+            life.beat("database")
+            output.line(exchange.line)
+            if prepared.handed.detach:
+                detach()
+                output.broken = True
+            end = await run_accepted(prepared, connect, exchange, search_path, output, life=life)
+            return end.exit_status
+        finally:
+            watch.close()
 
 
 async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange, search_path: str | None,
@@ -81,36 +82,39 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     saver = Saver(connect, exchange.connection)
     saver.start()
     try:
-        if events.error is not None or life.error is not None:
-            end = folder_failed(events.error or life.error)
-        else:
-            end = await one_run(prepared, exchange, events, maker, saver, search_path, life)
-    except OSError as error:
-        life.error = error
-        end = folder_failed(error)
-    except Exception as error:  # a defect of the Trunk still ends the Exchange (RCT-2.9)
-        end = failed("trunk_failed", f"The Trunk failed: {type(error).__name__}: {error}")
-    await saver.stop()
-    if saver.rejected is not None and events.error is None and life.error is None:
-        end = failed("trunk_failed", str(saver.rejected))
-    try:
-        if events.error is None and life.error is None:
-            if events.end_fills(end.value()):
-                end = file_full()
-            write_end(events, folder, end)
-    except OSError as error:
-        life.error = error
-        end = folder_failed(error)
+        try:
+            if events.error is not None or life.error is not None:
+                end = folder_failed(events.error or life.error)
+            else:
+                end = await one_run(prepared, exchange, events, maker, saver, search_path, life)
+        except OSError as error:
+            life.error = error
+            end = folder_failed(error)
+        except Exception as error:  # a defect of the Trunk still ends the Exchange (RCT-2.9)
+            end = failed("trunk_failed", f"The Trunk failed: {type(error).__name__}: {error}")
+        await saver.stop()
+        if saver.rejected is not None and events.error is None and life.error is None:
+            end = failed("trunk_failed", str(saver.rejected))
+        try:
+            if events.error is None and life.error is None:
+                if events.end_fills(end.value()):
+                    end = file_full()
+                write_end(events, folder, end)
+        except OSError as error:
+            life.error = error
+            end = folder_failed(error)
+        events.close()
+        life.error = life.error or events.error
+        saved = await life.wait(save_end(saver, folder.exchange, maker.at_end(), end), "database")
+        if saved and events.error is None and life.error is None:
+            try:
+                folder.remove()
+            except OSError:
+                pass  # the end already stands; settling can remove what cleanup left
+        return end
     finally:
         events.close()
-    life.error = life.error or events.error
-    saved = await life.wait(save_end(saver, folder.exchange, maker.at_end(), end), "database")
-    if saved and events.error is None and life.error is None:
-        try:
-            folder.remove()
-        except OSError:
-            pass  # the end already stands; settling can remove what cleanup left
-    return end
+        await saver.close()
 
 
 def file_full() -> End:

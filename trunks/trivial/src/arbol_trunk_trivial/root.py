@@ -11,11 +11,15 @@ Every file is reached from the home folder, so a test gives the Trunk a home of 
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import os
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from psycopg.conninfo import conninfo_to_dict
 
@@ -38,6 +42,55 @@ class Root:
     @property
     def exchanges(self) -> Path:
         return self.folder / "exchanges"
+
+
+@dataclass(frozen=True)
+class InstalledDatabase:
+    name: str
+    address: str
+    host: str
+    port: int
+    account: str
+    socket: bool
+
+
+def installed_database(home: Path, *, expected_name: str | None = None) -> InstalledDatabase:
+    """Read the one target, with an owner-only socket available for an isolated installation."""
+    try:
+        settings = read_json(home / ".arbol/database.json")
+        if not isinstance(settings, dict) or set(settings) != {"address", "database"}:
+            raise ValueError
+        address, name = settings["address"], settings["database"]
+        if (not isinstance(address, str) or not isinstance(name, str) or not name.strip()
+                or len(name.encode("utf-8")) > 63 or "\0" in name
+                or name.lower() in {"postgres", "template0", "template1"}
+                or (expected_name is not None and name != expected_name)):
+            raise ValueError
+        url = urlsplit(address)
+        if (url.scheme not in ("postgres", "postgresql") or not url.hostname or not url.username
+                or not url.port or url.password is not None or url.path not in ("", "/")
+                or url.query or url.fragment):
+            raise ValueError
+        host, account = unquote(url.hostname, errors="strict"), unquote(url.username, errors="strict")
+        if not account.strip() or "\0" in account:
+            raise ValueError
+        socket = host.startswith("/")
+        if socket:
+            directory = Path(host).resolve(strict=True)
+            mode = directory.stat()
+            installed_socket = home / "Library/Application Support/Arbol/database/socket"
+            if ("," in str(directory) or directory == installed_socket.resolve()
+                    or not stat.S_ISDIR(mode.st_mode) or mode.st_uid != os.getuid() or mode.st_mode & 0o077):
+                raise ValueError
+            host = str(directory)
+        else:
+            ip = ipaddress.ip_address(host)
+            if not ip.is_loopback:
+                raise ValueError
+            host = str(ip)
+        return InstalledDatabase(name, address, host, url.port, account, socket)
+    except (OSError, ValueError, RuntimeError):
+        raise Refusal("database_unavailable", "Cannot read the installed Arbol database configuration.") from None
 
 
 def roots_folder(home: Path) -> Path:

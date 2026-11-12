@@ -8,10 +8,15 @@ database the address names. The limit of a call is not divided by ARBOL_TEST_TIM
 from __future__ import annotations
 
 import asyncio
+import os
+import re
+import tomllib
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
+from pathlib import Path
 from typing import Any, Protocol
 
 import psycopg
@@ -20,7 +25,10 @@ from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
 from . import NAME
+from .build import Compatibility
+from .errors import Refusal
 from .history import HistoryRow
+from .root import InstalledDatabase
 from .rows import Row, RunRow, jsonb, row_line
 from .storage import stored
 
@@ -29,6 +37,15 @@ CALL_SECONDS = 5.0
 
 class DatabaseUnavailable(Exception):
     """A call to the database failed or did not end within its limit; the connection is given up."""
+
+
+class SchemaRefusal(DatabaseUnavailable):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+    def refusal(self) -> Refusal:
+        return Refusal(self.code, str(self))
 
 
 class RowRejected(Exception):
@@ -137,6 +154,114 @@ class Connection(Protocol):
 
 
 Connect = Callable[[], Coroutine[Any, Any, Connection]]
+type LedgerRow = tuple[int, str, str, int]
+
+
+def release_history(path: Path) -> tuple[LedgerRow, ...]:
+    """The expected history comes from the installed release and can advance independently of this Build."""
+    try:
+        with path.open("rb") as stream:
+            manifest = tomllib.load(stream)
+        entries = manifest["migrations"]
+        if (set(manifest) != {"format", "migrations"} or type(manifest["format"]) is not int
+                or manifest["format"] != 1 or not isinstance(entries, list)):
+            raise ValueError
+        rows: list[LedgerRow] = []
+        identities: set[str] = set()
+        filenames: set[str] = set()
+        for number, entry in enumerate(entries, 1):
+            if not isinstance(entry, dict) or set(entry) != {
+                    "revision", "predecessor", "id", "file", "sha256", "compatibility_version"}:
+                raise ValueError
+            revision, predecessor = entry["revision"], entry["predecessor"]
+            name, digest, version = entry["id"], entry["sha256"], entry["compatibility_version"]
+            filename = entry["file"]
+            previous = rows[-1][3] if rows else 0
+            if (type(revision) is not int or revision != number
+                    or type(predecessor) is not int or predecessor != number - 1
+                    or not isinstance(name, str) or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name) is None
+                    or name in identities
+                    or not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                    or not isinstance(filename, str) or re.fullmatch(r"[a-zA-Z0-9_-]+\.sql", filename) is None
+                    or filename in filenames
+                    or type(version) is not int or version < 1 or version not in (previous, previous + 1)):
+                raise ValueError
+            migration = path.with_name(filename)
+            if migration.is_symlink() or sha256(migration.read_bytes()).hexdigest() != digest:
+                raise ValueError
+            rows.append((revision, name, digest, version))
+            identities.add(name)
+            filenames.add(filename)
+        if rows:
+            return tuple(rows)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    raise Refusal("schema_invalid", "The installed Arbol migration manifest is unreadable.")
+
+
+@dataclass(frozen=True)
+class SchemaGuard:
+    database: str
+    history: tuple[LedgerRow, ...]
+    compatibility: Compatibility
+
+    async def require(self, connection: psycopg.AsyncConnection[Any]) -> tuple[int, int]:
+        """Verify the ledger and return (revision, compatibility version) on the writer's connection."""
+        if connection.info.dbname != self.database:
+            raise SchemaRefusal("database_unavailable", "PostgreSQL did not connect to the configured Arbol database.")
+        try:
+            async with connection.cursor() as cursor:
+                await within_limit(cursor.execute(
+                    "SELECT revision, migration_id, checksum, compatibility_version "
+                    "FROM public.arbol_schema_migrations "
+                    "WHERE (SELECT count(*) FROM pg_catalog.pg_class c "
+                    "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relpersistence = 'p' "
+                    "AND c.relname IN ('arbol_schema_migrations', 'arbol_schema_upgrades')) = 2 "
+                    "ORDER BY revision LIMIT %s",
+                    (len(self.history) + 1,)))
+                rows = await within_limit(cursor.fetchall())
+        except DatabaseUnavailable as error:
+            if isinstance(error.__cause__, sqlstate.UndefinedTable):
+                raise SchemaRefusal("schema_uninitialized", "The installed Arbol database has no schema ledger.") from None
+            if isinstance(error.__cause__, (sqlstate.UndefinedColumn, sqlstate.InsufficientPrivilege)):
+                raise SchemaRefusal("schema_invalid", "The installed Arbol migration ledger is unreadable.") from None
+            raise
+        if (not rows or tuple(rows) != self.history[:len(rows)]
+                or any(type(row[0]) is not int or type(row[3]) is not int for row in rows)):
+            raise SchemaRefusal("schema_invalid", "The installed Arbol migration ledger does not match this release.")
+        revision, _, _, version = self.history[len(rows) - 1]
+        minimum = self.compatibility.get(version)
+        if minimum is None or revision < minimum:
+            raise SchemaRefusal("schema_incompatible", f"This Trunk Build cannot use Arbol schema revision {revision} "
+                                                     f"with compatibility version {version}.")
+        return revision, version
+
+
+def installed_postgres(home: Path, target: InstalledDatabase, password: str | None,
+                       compatibility: Compatibility) -> Connect:
+    """Use the same explicit target as status, with credentials scoped to libpq."""
+    if "PGSERVICE" in os.environ or (not target.socket and not password):
+        raise Refusal("database_unavailable", "Cannot resolve the installed database credential and connection.")
+    info = make_conninfo(dbname=target.name, user=target.account, host=target.host, port=target.port,
+                         hostaddr="" if target.socket else target.host, password="" if target.socket else password,
+                         passfile=os.devnull, sslmode="disable", gssencmode="disable", target_session_attrs="any",
+                         client_encoding="UTF8", connect_timeout=int(CALL_SECONDS), application_name=NAME,
+                         options=f"-csearch_path=public -cstatement_timeout={int(CALL_SECONDS * 1000)}")
+    manifest = home / ".local/bin/.arbol-builds/schema/migrations.toml"
+    return postgres(info, guard=SchemaGuard(target.name, release_history(manifest), compatibility))
+
+
+async def preflight(connect: Connect, deadline: float) -> None:
+    """Check before the first local file effect as well as checking each production connection."""
+    try:
+        async with asyncio.timeout_at(deadline):
+            connection = await connect()
+    except SchemaRefusal as error:
+        raise error.refusal() from None
+    except (DatabaseUnavailable, TimeoutError):
+        raise Refusal("database_unavailable", "The installed Arbol database did not answer.") from None
+    await connection.close()
 
 
 def conninfo(address: str, database: str, password: str | None) -> str:
@@ -316,10 +441,18 @@ class PostgresConnection:
             pass
 
 
-def postgres(info: str) -> Connect:
+def postgres(info: str, *, guard: SchemaGuard | None = None) -> Connect:
     """What connects to the Root's database, each time it is called on a new connection."""
 
     async def connect() -> Connection:
-        return PostgresConnection(await within_limit(psycopg.AsyncConnection.connect(info, autocommit=True)))
+        raw = await within_limit(psycopg.AsyncConnection.connect(info, autocommit=True))
+        connection = PostgresConnection(raw)
+        try:
+            if guard is not None:
+                await guard.require(raw)
+        except BaseException:
+            await connection.close()
+            raise
+        return connection
 
     return connect

@@ -16,13 +16,14 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .build import BuildRecordError, build_number
+from .accept import ACCEPTANCE_SECONDS
+from .build import BuildRecordError, Compatibility, build_info
 from .command import handed, parse
-from .database import Connect, conninfo, postgres
+from .database import Connect, installed_postgres, preflight
 from .detach import lead_process_group
 from .errors import Refusal
 from .process import started_at
-from .root import SECURITY
+from .root import SECURITY, installed_database
 from .run import Output, run_exchange
 from .settle import settle_exchange
 from .start import Prepared, prepare
@@ -31,24 +32,31 @@ from .termination import install_handlers
 Connector = Callable[[Prepared], Connect]
 
 
-def postgres_for(prepared: Prepared) -> Connect:
-    """The Root's own database, at the address of `~/.arbol/database.json` with the password of the Keychain."""
-    return postgres(conninfo(prepared.address, prepared.root.database, prepared.password))
+def postgres_for(prepared: Prepared, home: Path, compatibility: Compatibility) -> Connect:
+    target = installed_database(home, expected_name=prepared.root.database)
+    if target.address != prepared.address:
+        raise Refusal("database_unavailable", "The installed Arbol database configuration changed during launch.")
+    return installed_postgres(home, target, prepared.password, compatibility)
 
 
-async def start(args: list[str], *, home: Path, started: float, connector: Connector = postgres_for,
+async def start(args: list[str], *, home: Path, started: float, connector: Connector | None = None,
                 security: str = SECURITY, started_in: str | None = None, output: Output | None = None,
                 search_path: str | None = None, settle_connect: Connect | None = None) -> int:
     """`run` from its command line to its end: one answer on standard output, the acceptance line or a refusal, then
     the Exchange. `started` is the start of the Trunk (time.monotonic()); a refusal is the exit status 1 (RCT-2)."""
     output = output or Output()
     try:
-        build = build_number()
         command = parse(args)
+        build, compatibility = build_info()
         if command.operation == "settle":
             return await settle_exchange(home, command.root, command.options["--exchange"], output=output,
-                                         security=security, connect=settle_connect)
+                                         security=security, connect=settle_connect, compatibility=compatibility)
         prepared = prepare(handed(command, started_in), home, security)
+        if connector is None:
+            connect = postgres_for(prepared, home, compatibility)
+            await preflight(connect, started + ACCEPTANCE_SECONDS)
+        else:
+            connect = connector(prepared)
     except BuildRecordError as error:
         output.line(Refusal("trunk_failed", str(error)).line())
         return 1
@@ -56,7 +64,7 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
         output.line(refusal.line())
         return 1
     process = {"pid": os.getpid(), "startedAt": started_at()}
-    return await run_exchange(prepared, connector(prepared), build=build, process=process, started=started,
+    return await run_exchange(prepared, connect, build=build, process=process, started=started,
                               output=output, search_path=search_path)
 
 

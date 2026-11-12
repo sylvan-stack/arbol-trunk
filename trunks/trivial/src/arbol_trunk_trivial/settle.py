@@ -10,14 +10,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .build import Compatibility, build_info
 from .claim import root_lock
-from .database import Connect, Connection, DatabaseUnavailable, StoredExchange, conninfo, postgres
+from .database import (
+    Connect,
+    Connection,
+    DatabaseUnavailable,
+    SchemaRefusal,
+    StoredExchange,
+    installed_postgres,
+    preflight,
+)
 from .end import End
 from .errors import Refusal
 from .folder import ExchangeFolder
 from .output import Output
 from .process import process_alive as process_alive
-from .root import SECURITY, database_address, find_root, keychain_password, read_json, role
+from .root import SECURITY, Root, find_root, installed_database, keychain_password, read_json
 from .rows import Row, RowMaker, RunRow, moment
 
 DATABASE_SECONDS = 10.0  # not divided by ARBOL_TEST_TIME_SCALE (RCT-4)
@@ -80,6 +89,12 @@ def replay(path: Path, exchange: str, accepted_at: datetime) -> Replay:
     return Replay(rows, end, moment(last_at.isoformat()))
 
 
+def settlement_connect(home: Path, root: Root, security: str, compatibility: Compatibility | None = None) -> Connect:
+    target = installed_database(home, expected_name=root.database)
+    password = None if target.socket else keychain_password(target.account, security)
+    return installed_postgres(home, target, password, build_info()[1] if compatibility is None else compatibility)
+
+
 async def open_settlement(home: Path, root_id: str, exchange: str, *, security: str = SECURITY,
                           connect: Connect | None = None, deadline: float | None = None) -> Settlement | None:
     """No folder or never accepted: remove what remains and return None. A living process or an unavailable
@@ -100,8 +115,7 @@ async def open_settlement(home: Path, root_id: str, exchange: str, *, security: 
     connection: Connection | None = None
     try:
         if connect is None:
-            address = database_address(home)
-            connect = postgres(conninfo(address, root.database, keychain_password(role(address), security)))
+            connect = settlement_connect(home, root, security)
         deadline = deadline if deadline is not None else time.monotonic() + DATABASE_SECONDS
         async with asyncio.timeout(max(deadline - time.monotonic(), 0)):
             connection = await connect()
@@ -111,6 +125,8 @@ async def open_settlement(home: Path, root_id: str, exchange: str, *, security: 
             await connection.close()
             return None
         return Settlement(folder, connection, stored)
+    except SchemaRefusal as error:
+        raise error.refusal() from None
     except (DatabaseUnavailable, TimeoutError):
         if connection is not None:
             await connection.close()
@@ -136,35 +152,35 @@ def final_end(record: dict[str, Any], found: Replay) -> End:
 
 
 async def settle_exchange(home: Path, root_id: str, exchange: str, *, output: Output,
-                          security: str = SECURITY, connect: Connect | None = None) -> int:
+                          security: str = SECURITY, connect: Connect | None = None,
+                          compatibility: Compatibility | None = None) -> int:
     state = "none"
     root = find_root(home, root_id)
     if (root.exchanges / exchange).exists():
         deadline = time.monotonic() + DATABASE_SECONDS
+        if connect is None:
+            connect = settlement_connect(home, root, security, compatibility)
+            await preflight(connect, deadline)
         async with root_lock(root.exchanges, deadline):
             if (root.exchanges / exchange).exists():
                 state = await _settle_locked(home, root_id, exchange, security=security, connect=connect,
                                              deadline=deadline)
             else:
                 # The folder existed before we waited: another settler removed it, so report its stored result.
-                state = await _stored_state(home, root_id, exchange, security=security, connect=connect,
-                                            deadline=deadline)
+                state = await _stored_state(exchange, connect, deadline=deadline)
     output.line(json.dumps({"exchange": exchange, "settled": state}, separators=(",", ":")))
     return 0
 
 
-async def _stored_state(home: Path, root_id: str, exchange: str, *, security: str,
-                        connect: Connect | None, deadline: float) -> str:
+async def _stored_state(exchange: str, connect: Connect, *, deadline: float) -> str:
     connection: Connection | None = None
     try:
-        if connect is None:
-            root = find_root(home, root_id)
-            address = database_address(home)
-            connect = postgres(conninfo(address, root.database, keychain_password(role(address), security)))
         async with asyncio.timeout(max(deadline - time.monotonic(), 0)):
             connection = await connect()
             stored = await connection.exchange_state(exchange)
         return stored.state if stored is not None else "none"
+    except SchemaRefusal as error:
+        raise error.refusal() from None
     except (DatabaseUnavailable, TimeoutError):
         raise Refusal("database_unavailable", "The database did not answer within 10 seconds.") from None
     finally:

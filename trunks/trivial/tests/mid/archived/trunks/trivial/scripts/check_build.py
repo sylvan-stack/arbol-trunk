@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import argparse
 import ast
-import importlib
 import json
 import os
 import pwd
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import unittest
@@ -17,8 +17,22 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 
-from scripts.build_support import COMPONENT, ENTRY, build_folder, digest, metadata, read_object, target  # noqa: E402
+from single_installation_fixture import LiveInstallation, working_build  # noqa: E402
+
+from arbol_trunk_trivial.build import schema_compatibility, source_compatibility  # noqa: E402
+from scripts.build_support import (  # noqa: E402
+    COMPONENT,
+    ENTRY,
+    NUMBER,
+    build_folder,
+    digest,
+    metadata,
+    read_object,
+    target,
+)
 from scripts.package_build import MUTABLE  # noqa: E402
 
 
@@ -32,10 +46,11 @@ def program_policy(folder: Path, manifest: dict[str, Any]) -> None:
     description = read_object(folder / "arbol-build.json")
     package = read_object(folder / "package.json")
     if (description.get("component") != COMPONENT or description.get("entry") != ENTRY
-            or description.get("rootContracts") != [1]
+            or "rootContracts" in description
+            or schema_compatibility(manifest.get("schemaCompatibility")) != source_compatibility(folder)
             or package.get("name") != "@sylvan-stack/arbol-trunk-trivial"
             or package.get("repository", {}).get("directory") != "trunks/trivial"):
-        raise ValueError("The Build description must name this Trunk, its entry and Root Contracts.")
+        raise ValueError("The Build description must name this Trunk, its entry and schema compatibility.")
     allowed = sys.stdlib_module_names | {"arbol_trunk_trivial", "psycopg"}
     files = [*source.rglob("*.py"), folder / "bin/entry.py"]
     for path in files:
@@ -53,14 +68,12 @@ def program_policy(folder: Path, manifest: dict[str, Any]) -> None:
             for name in imports:
                 if name.split(".")[0] not in allowed:
                     raise ValueError(f"The program imports {name}, outside the standard library and psycopg.")
-        if path.name in ("__init__.py", "root.py") and path.parent == source / "arbol_trunk_trivial":
+        if path.name == "__init__.py" and path.parent == source / "arbol_trunk_trivial":
             constants = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
                          if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
-                         and node.targets[0].id in {"NAME", "CODE_NAME", "ROOT_CONTRACTS"}}
-            if path.name == "__init__.py" and constants != {"NAME": COMPONENT, "CODE_NAME": "trivial"}:
+                         and node.targets[0].id in {"NAME", "CODE_NAME"}}
+            if constants != {"NAME": COMPONENT, "CODE_NAME": "trivial"}:
                 raise ValueError("The program's component and code name differ from its Build.")
-            if path.name == "root.py" and list(constants.get("ROOT_CONTRACTS", ())) != description["rootContracts"]:
-                raise ValueError("The program's Root Contracts differ from its Build.")
 
 
 def runtime_probe(folder: Path) -> None:
@@ -90,8 +103,10 @@ def verify(folder: Path, *, candidate: bool) -> dict[str, Any]:
     folder = folder.resolve()
     version, pin, psycopg = metadata(folder)
     value = read_object(folder / "package-manifest.json")
+    compatibility = source_compatibility(folder)
     if (value.get("format") != 1 or value.get("component") != COMPONENT or value.get("entry") != ENTRY
-            or value.get("packageVersion") != version or value.get("rootContracts") != [1]
+            or value.get("packageVersion") != version or "rootContracts" in value
+            or schema_compatibility(value.get("schemaCompatibility")) != compatibility
             or value.get("candidate") is not candidate
             or value.get("dependencies") != {"psycopg": psycopg, "psycopg-binary": psycopg}):
         raise ValueError("The package manifest does not match the Trunk's metadata.")
@@ -101,8 +116,9 @@ def verify(folder: Path, *, candidate: bool) -> dict[str, Any]:
     else:
         record = read_object(folder / "build.json")
         if (record.get("component") != COMPONENT or record.get("build") != value.get("build")
+                or not isinstance(record.get("build"), str) or not NUMBER.fullmatch(record["build"])
                 or record.get("entry") != ENTRY or record.get("packageVersion") != version
-                or record.get("rootContracts") != [1]):
+                or "rootContracts" in record or schema_compatibility(record.get("schemaCompatibility")) != compatibility):
             raise ValueError("The package and numbered Build record differ.")
     python = value.get("python")
     architecture = target()
@@ -144,21 +160,9 @@ def unit(folder: Path) -> int:
     return 0 if unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful() else 1
 
 
-def live_fixture(folder: Path, owner: Path) -> Any:
-    # The shared arbol-root checkout (single-checkout migration). No Root code is copied into this package (TRV-D21).
-    root = owner / "repos/sylvan-stack/arbol-root"
-    if read_object(root / "package.json").get("name") != "@sylvan-stack/arbol-root":
-        raise ValueError("The live check needs the shared arbol-root checkout.")
-    sys.path.insert(0, str(root / "contract/conformance"))
-    fixture = importlib.import_module("rct_conformance.home").ScenarioHome
-    return fixture.create("live", [str(folder / ENTRY)], 1, root / "contract/1/layout.sql",
-                          python=str(folder / "runtime/python/bin/python3.14"))
-
-
-def driver_bridge(launcher: Path, owner: Path, state: Path) -> None:
-    driver = owner / ".local/bin/arbol-claude-driver"
+def driver_bridge(launcher: Path, owner: Path, state: Path, driver: Path) -> None:
     if not driver.is_file() or not os.access(driver, os.X_OK):
-        raise ValueError("The live check needs the installed Claude Driver.")
+        raise ValueError("The live check needs the selected Claude Driver Build executable.")
     quote = shlex.quote
     # claude finds its Keychain login under the account named by USER; without it the login is invisible.
     launcher.write_text("#!/bin/sh\n" + f"HOME={quote(str(owner))} USER={quote(pwd.getpwuid(os.getuid()).pw_name)} "
@@ -173,30 +177,38 @@ def live(folder: Path, *, owner: Path | None = None) -> int:
                                 str(owner / "Library/Application Support/Arbol/drivers/arbol-claude-driver"))
     if not state_text or not Path(state_text).is_absolute():
         raise ValueError("live: ARBOL_BUILD_TEST_STATE_DIR must be an absolute Driver state directory.")
+    state = Path(state_text).resolve(strict=True)
+    info = state.stat()
+    installed = owner / "Library/Application Support/Arbol/drivers/claude"
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
+            or state == installed.resolve() or state.is_relative_to(installed.resolve())):
+        raise ValueError("live: use an owner-only test state directory separate from the installed Driver state.")
     # TRV-D12: an explicitly selected Subscription, signed in in that state directory; test-anthropic by default.
     subscription = os.environ.get("ARBOL_BUILD_LIVE_SUBSCRIPTION", "test-anthropic")
-    if not re.fullmatch(r"[a-z][a-z0-9-]*", subscription):
-        raise ValueError("live: ARBOL_BUILD_LIVE_SUBSCRIPTION must be lower-case ASCII letters, digits and hyphens, "
-                         "starting with a letter.")
-    fixture = live_fixture(folder, owner)
+    if not re.fullmatch(r"test-[a-z][a-z0-9-]*", subscription):
+        raise ValueError("live: ARBOL_BUILD_LIVE_SUBSCRIPTION must name a dedicated test-* Subscription.")
+    arbol, arbol_build = working_build("ARBOL_BUILD_LIVE_ARBOL", "arbol", "bin/arbol")
+    driver, driver_build = working_build("ARBOL_BUILD_LIVE_CLAUDE", "arbol-claude-driver", "bin/arbol-claude-driver")
+    fixture = LiveInstallation(arbol)
     try:
-        driver_bridge(fixture.standin / "bin/arbol-claude-driver", owner, Path(state_text))
-        result = fixture.run(["run", "--driver", "claude", "--subscription", subscription, "--model", "haiku",
-                              "Answer with the single word: ready"], scale=None, seconds=300)
-        if result.status != 0:
-            print(json.dumps({"check": "live", "passed": False, "exitStatus": result.status,
-                              "output": result.output}), flush=True)
+        driver_bridge(fixture.bin / "arbol-claude-driver", owner, state, driver / "bin/arbol-claude-driver")
+        status, output = fixture.run(folder / ENTRY, subscription)
+        if status != 0:
+            print(json.dumps({"check": "live", "passed": False, "exitStatus": status, "output": output}), flush=True)
             return 1
         exchanges = fixture.rows("SELECT id, state, build, route FROM exchanges")
         messages = fixture.rows("SELECT role, text FROM messages WHERE role = 'assistant'")
         runs = fixture.rows("SELECT kind, outcome, usage, started FROM runs")
-        if (len(exchanges) != 1 or exchanges[0]["state"] != "completed" or not messages
+        expected_build = read_object(folder / "package-manifest.json")["build"]
+        if (len(exchanges) != 1 or exchanges[0]["state"] != "completed" or exchanges[0]["build"] != expected_build
+                or not messages
                 or len(runs) != 1 or runs[0]["kind"] != "agent" or runs[0]["outcome"] != "completed"
                 or not runs[0]["usage"] or not isinstance(runs[0]["started"], dict)
                 or runs[0]["started"].get("subscriptionId") != subscription):
             raise ValueError("live: the completed Exchange, assistant answer or selected-account run and usage are missing.")
         print(json.dumps({"check": "live", "passed": True, "exchange": exchanges[0]["id"],
-                          "build": exchanges[0]["build"], "subscription": subscription, "model": "haiku",
+                          "build": exchanges[0]["build"], "arbolBuild": arbol_build, "driverBuild": driver_build,
+                          "subscription": subscription, "model": "haiku",
                           "usage": runs[0]["usage"]}), flush=True)
         return 0
     finally:

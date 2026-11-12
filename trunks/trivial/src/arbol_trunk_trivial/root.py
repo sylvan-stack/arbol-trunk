@@ -1,13 +1,4 @@
-"""How the Trivial Trunk finds its Root's folder and database (RCT-0).
-
-1. The Root's folder is `~/Library/Application Support/Arbol/roots/<root>/`; its `root.json` names the database and
-   the version of the Root Contract the Root uses.
-2. The address of the database server is `address` in `~/.arbol/database.json`, whose user is the database role.
-3. The password is the Keychain item `com.sylvan-stack.arbol.database` with that role as its account, read with
-   `security` within 2 seconds; the exit status 44 means there is no such item, and the Trunk connects without one.
-
-Every file is reached from the home folder, so a test gives the Trunk a home of its own (RCT-D7, RCT-D29).
-"""
+"""Resolve the single installation, PostgreSQL target and private runtime directory."""
 
 from __future__ import annotations
 
@@ -21,11 +12,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from psycopg.conninfo import conninfo_to_dict
-
 from .errors import Refusal
 
-ROOT_CONTRACTS = (1,)  # the versions of the Root Contract this Trunk implements, as arbol-build.json lists them (TRV-D14)
 KEYCHAIN_SERVICE = "com.sylvan-stack.arbol.database"
 KEYCHAIN_SECONDS = 2.0  # not divided by ARBOL_TEST_TIME_SCALE (RCT-4)
 NO_SUCH_ITEM = 44
@@ -33,28 +21,15 @@ SECURITY = "/usr/bin/security"
 
 
 @dataclass(frozen=True)
-class Root:
-    identifier: str
-    folder: Path
-    database: str
-    root_contract: int
-
-    @property
-    def exchanges(self) -> Path:
-        return self.folder / "exchanges"
-
-
-@dataclass(frozen=True)
 class InstalledDatabase:
     name: str
-    address: str
     host: str
     port: int
     account: str
     socket: bool
 
 
-def installed_database(home: Path, *, expected_name: str | None = None) -> InstalledDatabase:
+def installed_database(home: Path) -> InstalledDatabase:
     """Read the one target, with an owner-only socket available for an isolated installation."""
     try:
         settings = read_json(home / ".arbol/database.json")
@@ -63,8 +38,7 @@ def installed_database(home: Path, *, expected_name: str | None = None) -> Insta
         address, name = settings["address"], settings["database"]
         if (not isinstance(address, str) or not isinstance(name, str) or not name.strip()
                 or len(name.encode("utf-8")) > 63 or "\0" in name
-                or name.lower() in {"postgres", "template0", "template1"}
-                or (expected_name is not None and name != expected_name)):
+                or name.lower() in {"postgres", "template0", "template1"}):
             raise ValueError
         url = urlsplit(address)
         if (url.scheme not in ("postgres", "postgresql") or not url.hostname or not url.username
@@ -88,60 +62,52 @@ def installed_database(home: Path, *, expected_name: str | None = None) -> Insta
             if not ip.is_loopback:
                 raise ValueError
             host = str(ip)
-        return InstalledDatabase(name, address, host, url.port, account, socket)
+        return InstalledDatabase(name, host, url.port, account, socket)
     except (OSError, ValueError, RuntimeError):
         raise Refusal("database_unavailable", "Cannot read the installed Arbol database configuration.") from None
 
 
-def roots_folder(home: Path) -> Path:
-    return home / "Library" / "Application Support" / "Arbol" / "roots"
+@dataclass(frozen=True)
+class Installation:
+    home: Path
+    runtime: Path
+    bin_dir: Path
+    target: InstalledDatabase
+
+    @property
+    def exchanges(self) -> Path:
+        return self.runtime / "exchanges"
+
+    # Compatibility with the acceptance code until the versioned record lands.
+    identifier = ""
+    root_contract = 1
+
+
+def installation(home: Path) -> Installation:
+    target = installed_database(home)
+    runtime = home / "Library/Application Support/Arbol/runtime"
+    bin_dir = home / ".local/bin"
+    if target.socket:
+        runtime = Path(os.environ.get("ARBOL_EXCHANGE_RUNTIME_DIR", runtime))
+        bin_dir = Path(os.environ.get("ARBOL_EXCHANGE_BIN_DIR", bin_dir))
+        if not runtime.is_absolute() or not bin_dir.is_absolute():
+            raise Refusal("invalid_input", "Isolated runtime and bin directories must be absolute.")
+    return Installation(home, runtime, bin_dir, target)
+
+
+def private_directory(path: Path) -> None:
+    try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError
+    except (OSError, ValueError):
+        raise Refusal("runtime_unavailable", "The Exchange runtime needs an owner-only directory.") from None
 
 
 def read_json(path: Path) -> Any:
     with path.open(encoding="utf-8") as stream:
         return json.load(stream)
-
-
-def find_root(home: Path, identifier: str) -> Root:
-    """The Root's folder and its record; `unknown_root` without a readable `root.json`, `contract_mismatch` when its
-    version is not one this Trunk implements."""
-    folder = roots_folder(home) / identifier
-    try:
-        record = read_json(folder / "root.json")
-    except (OSError, ValueError):
-        raise Refusal("unknown_root", f"The Root {identifier} has no readable root.json in {folder}.") from None
-    database = record.get("database") if isinstance(record, dict) else None
-    version = record.get("rootContract") if isinstance(record, dict) else None
-    if not isinstance(database, str) or not database or not isinstance(version, int) or isinstance(version, bool):
-        raise Refusal("unknown_root", f"The root.json of the Root {identifier} names no database or rootContract.")
-    if version not in ROOT_CONTRACTS:
-        raise Refusal("contract_mismatch", f"The Root {identifier} uses Root Contract version {version}; this Build "
-                                           f"implements {', '.join(str(v) for v in ROOT_CONTRACTS)}.")
-    return Root(identifier, folder, database, version)
-
-
-def database_address(home: Path) -> str:
-    """`address` in `~/.arbol/database.json`."""
-    file = home / ".arbol" / "database.json"
-    try:
-        settings = read_json(file)
-    except (OSError, ValueError):
-        raise Refusal("database_unavailable", f"{file} cannot be read.") from None
-    address = settings.get("address") if isinstance(settings, dict) else None
-    if not isinstance(address, str) or not address:
-        raise Refusal("database_unavailable", f"{file} names no address.")
-    return address
-
-
-def role(address: str) -> str:
-    """The database role, the user that the address names."""
-    try:
-        user = conninfo_to_dict(address).get("user")
-    except Exception:
-        raise Refusal("database_unavailable", "The address in ~/.arbol/database.json cannot be read.") from None
-    if not isinstance(user, str) or not user:
-        raise Refusal("database_unavailable", "The address in ~/.arbol/database.json names no user.")
-    return user
 
 
 def keychain_password(account: str, security: str = SECURITY) -> str | None:

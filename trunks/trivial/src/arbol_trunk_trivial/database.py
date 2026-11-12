@@ -1,9 +1,4 @@
-"""The Root's database (RCT-0, RCT-3): psycopg 3's asynchronous connection, with a limit of 5 seconds to connect and
-for each statement, so that no call holds up the Trunk's loop for longer (RCT-2, TRV-D9).
-
-The address of `~/.arbol/database.json` reaches the server; the database that `root.json` names takes the place of any
-database the address names. The limit of a call is not divided by ARBOL_TEST_TIME_SCALE (RCT-4).
-"""
+"""Bounded PostgreSQL operations against the installed database."""
 
 from __future__ import annotations
 
@@ -28,7 +23,7 @@ from . import NAME
 from .build import Compatibility
 from .errors import Refusal
 from .history import HistoryRow
-from .root import InstalledDatabase
+from .root import Installation, keychain_password
 from .rows import Row, RunRow, jsonb, row_line
 from .storage import stored
 
@@ -135,7 +130,7 @@ def checked_replacement(found: Sequence[Any] | None) -> Replacement:
 
 
 class Connection(Protocol):
-    """The calls the Trunk makes on its Root's database."""
+    """The calls the Trunk makes on the installed database."""
 
     async def accept(self, acceptance: Acceptance) -> Accepted: ...
 
@@ -238,9 +233,10 @@ class SchemaGuard:
         return revision, version
 
 
-def installed_postgres(home: Path, target: InstalledDatabase, password: str | None,
-                       compatibility: Compatibility) -> Connect:
+def installed_postgres(context: Installation, security: str, compatibility: Compatibility) -> Connect:
     """Use the same explicit target as status, with credentials scoped to libpq."""
+    target = context.target
+    password = None if target.socket else keychain_password(target.account, security)
     if "PGSERVICE" in os.environ or (not target.socket and not password):
         raise Refusal("database_unavailable", "Cannot resolve the installed database credential and connection.")
     info = make_conninfo(dbname=target.name, user=target.account, host=target.host, port=target.port,
@@ -248,7 +244,7 @@ def installed_postgres(home: Path, target: InstalledDatabase, password: str | No
                          passfile=os.devnull, sslmode="disable", gssencmode="disable", target_session_attrs="any",
                          client_encoding="UTF8", connect_timeout=int(CALL_SECONDS), application_name=NAME,
                          options=f"-csearch_path=public -cstatement_timeout={int(CALL_SECONDS * 1000)}")
-    manifest = home / ".local/bin/.arbol-builds/schema/migrations.toml"
+    manifest = context.bin_dir / ".arbol-builds/schema/migrations.toml"
     return postgres(info, guard=SchemaGuard(target.name, release_history(manifest), compatibility))
 
 

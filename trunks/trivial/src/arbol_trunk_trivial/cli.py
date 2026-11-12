@@ -1,6 +1,6 @@
 """The command of a Build of the Trivial Trunk, as the launcher `arbol-trunk` starts it (RCT-0):
 
-    arbol-trunk-trivial --root <root> run [--request <file>] [--exchange <id>] [--chat <id>] [--cwd <folder>]
+    arbol-trunk-trivial run [--request <file>] [--exchange <id>] [--chat <id>] [--cwd <folder>]
                                           [--driver <d>] [--subscription <s>] [--model <m>] [--effort <e>]
                                           [--detach] ["<message>"]
 
@@ -17,26 +17,19 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .accept import ACCEPTANCE_SECONDS
-from .build import BuildRecordError, Compatibility, build_info
+from .build import BuildRecordError, build_info
 from .command import handed, parse
 from .database import Connect, installed_postgres, preflight
 from .detach import lead_process_group
 from .errors import Refusal
 from .process import started_at
-from .root import SECURITY, installed_database
+from .root import SECURITY, installation, private_directory
 from .run import Output, run_exchange
 from .settle import settle_exchange
 from .start import Prepared, prepare
 from .termination import install_handlers
 
 Connector = Callable[[Prepared], Connect]
-
-
-def postgres_for(prepared: Prepared, home: Path, compatibility: Compatibility) -> Connect:
-    target = installed_database(home, expected_name=prepared.root.database)
-    if target.address != prepared.address:
-        raise Refusal("database_unavailable", "The installed Arbol database configuration changed during launch.")
-    return installed_postgres(home, target, prepared.password, compatibility)
 
 
 async def start(args: list[str], *, home: Path, started: float, connector: Connector | None = None,
@@ -48,15 +41,18 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
     try:
         command = parse(args)
         build, compatibility = build_info()
+        context = installation(home)
         if command.operation == "settle":
-            return await settle_exchange(home, command.root, command.options["--exchange"], output=output,
+            return await settle_exchange(context, command.options["--exchange"], output=output,
                                          security=security, connect=settle_connect, compatibility=compatibility)
-        prepared = prepare(handed(command, started_in), home, security)
+        prepared = prepare(handed(command, started_in), context)
         if connector is None:
-            connect = postgres_for(prepared, home, compatibility)
+            connect = installed_postgres(context, security, compatibility)
             await preflight(connect, started + ACCEPTANCE_SECONDS)
         else:
             connect = connector(prepared)
+        private_directory(context.runtime)
+        private_directory(context.exchanges)
     except BuildRecordError as error:
         output.line(Refusal("trunk_failed", str(error)).line())
         return 1

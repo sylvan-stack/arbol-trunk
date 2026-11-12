@@ -1,8 +1,8 @@
 """What is handed to `run` (RCT-0, "What is handed to a Trunk").
 
-The launcher hands a Build `--root <root>` followed by the command and every later argument unchanged:
+The launcher hands a Build the command and every later argument unchanged:
 
-    --root <root> run [--request <file>] [--exchange <id>] [--chat <id>] [--replaces <id>] [--cwd <folder>]
+    run [--request <file>] [--exchange <id>] [--chat <id>] [--replaces <id>] [--cwd <folder>]
                       [--driver <d>] [--subscription <s>] [--model <m>] [--effort <e>] [--detach] ["<message>"]
 
 Short values are options; anything long is in the request file, read once. An option given beside the request file
@@ -20,7 +20,6 @@ from typing import Any
 
 from .errors import invalid
 
-ROOT_IDENTIFIER = re.compile(r"[a-z0-9]+", re.ASCII)
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.ASCII)
 ROUTE_OPTIONS = {"--driver": "driver", "--subscription": "subscription", "--model": "model", "--effort": "effort"}
 VALUE_OPTIONS = ("--request", "--exchange", "--chat", "--replaces", "--cwd", *ROUTE_OPTIONS)
@@ -31,7 +30,6 @@ FLAG_OPTIONS = ("--detach",)
 class Command:
     """The command line of `run`, as it was given."""
 
-    root: str
     options: dict[str, str] = field(default_factory=dict)
     detach: bool = False
     message: str | None = None
@@ -42,7 +40,6 @@ class Command:
 class Handed:
     """Everything `run` was handed, from the options and the request file together (RCT-0, StartRequest)."""
 
-    root: str
     exchange: str | None
     chat: str | None
     replaces: str | None
@@ -54,19 +51,14 @@ class Handed:
 
 
 def parse(args: list[str]) -> Command:
-    """`--root <root>` first, then `run`, its options and the message as the last argument."""
-    if len(args) < 2 or args[0] != "--root":
-        raise invalid("The Root is handed first, as --root <root>.")
-    root = args[1]
-    if not ROOT_IDENTIFIER.fullmatch(root):
-        raise invalid(f"A Root identifier is one lower-case word of letters and digits, not {root!r}.")
-    rest = args[2:]
+    """Read the operation followed by its own arguments."""
+    rest = args
     if not rest:
         raise invalid("No command was given: run.")
     if rest[0] == "settle":
         if len(rest) != 2 or not UUID.fullmatch(rest[1]):
             raise invalid("settle takes exactly one Exchange UUID, written in lower case with hyphens.")
-        return Command(root, {"--exchange": rest[1]}, operation="settle")
+        return Command({"--exchange": rest[1]}, operation="settle")
     if rest[0] != "run":
         raise invalid(f"Unknown command: {rest[0]}.")
     options: dict[str, str] = {}
@@ -76,8 +68,6 @@ def parse(args: list[str]) -> Command:
     while index < len(rest):
         arg = rest[index]
         name, equals, given = arg.partition("=")
-        if name == "--root":
-            raise invalid("The Root is handed once, as --root before the command.")
         if name in FLAG_OPTIONS and not equals:
             detach = True
         elif name in VALUE_OPTIONS:
@@ -98,7 +88,7 @@ def parse(args: list[str]) -> Command:
         else:
             raise invalid(f"Unexpected argument: {arg}. The message is the last argument.")
         index += 1
-    return Command(root, options, detach, message)
+    return Command(options, detach, message)
 
 
 def read_request(file: str) -> dict[str, Any]:
@@ -157,6 +147,6 @@ def handed(command: Command, started_in: str | None = None) -> Handed:
         folder = started_in if started_in is not None else os.getcwd()
     if not os.path.isabs(folder) or not os.path.isdir(folder):
         raise invalid(f"The working folder is an absolute path to a folder that exists, not {folder!r}.")
-    return Handed(root=command.root, exchange=identifier("exchange", "--exchange"), chat=identifier("chat", "--chat"),
+    return Handed(exchange=identifier("exchange", "--exchange"), chat=identifier("chat", "--chat"),
                   replaces=replaces, message=message, route=route, small_call_route=small_call_route,
                   working_folder=folder, detach=command.detach)

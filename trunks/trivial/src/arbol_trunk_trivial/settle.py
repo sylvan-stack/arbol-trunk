@@ -26,7 +26,7 @@ from .errors import Refusal
 from .folder import ExchangeFolder
 from .output import Output
 from .process import process_alive as process_alive
-from .root import SECURITY, Root, find_root, installed_database, keychain_password, read_json
+from .root import SECURITY, Installation, read_json
 from .rows import Row, RowMaker, RunRow, moment
 
 DATABASE_SECONDS = 10.0  # not divided by ARBOL_TEST_TIME_SCALE (RCT-4)
@@ -89,18 +89,11 @@ def replay(path: Path, exchange: str, accepted_at: datetime) -> Replay:
     return Replay(rows, end, moment(last_at.isoformat()))
 
 
-def settlement_connect(home: Path, root: Root, security: str, compatibility: Compatibility | None = None) -> Connect:
-    target = installed_database(home, expected_name=root.database)
-    password = None if target.socket else keychain_password(target.account, security)
-    return installed_postgres(home, target, password, build_info()[1] if compatibility is None else compatibility)
-
-
-async def open_settlement(home: Path, root_id: str, exchange: str, *, security: str = SECURITY,
+async def open_settlement(context: Installation, exchange: str, *, security: str = SECURITY,
                           connect: Connect | None = None, deadline: float | None = None) -> Settlement | None:
     """No folder or never accepted: remove what remains and return None. A living process or an unavailable
     database is refused with its folder intact. Otherwise return the folder and the connection for replay."""
-    root = find_root(home, root_id)
-    path = root.exchanges / exchange
+    path = context.exchanges / exchange
     if not path.exists():
         return None
     try:
@@ -111,11 +104,11 @@ async def open_settlement(home: Path, root_id: str, exchange: str, *, security: 
         raise Refusal("trunk_failed", "The Exchange record cannot be read.") from None
     if process_alive(record.get("process")):
         raise Refusal("alive", "The Exchange's recorded process still lives.")
-    folder = ExchangeFolder(root.exchanges, exchange, record)
+    folder = ExchangeFolder(context.exchanges, exchange, record)
     connection: Connection | None = None
     try:
         if connect is None:
-            connect = settlement_connect(home, root, security)
+            connect = installed_postgres(context, security, build_info()[1])
         deadline = deadline if deadline is not None else time.monotonic() + DATABASE_SECONDS
         async with asyncio.timeout(max(deadline - time.monotonic(), 0)):
             connection = await connect()
@@ -151,19 +144,18 @@ def final_end(record: dict[str, Any], found: Replay) -> End:
     return End(value["state"], at, error)
 
 
-async def settle_exchange(home: Path, root_id: str, exchange: str, *, output: Output,
+async def settle_exchange(context: Installation, exchange: str, *, output: Output,
                           security: str = SECURITY, connect: Connect | None = None,
                           compatibility: Compatibility | None = None) -> int:
     state = "none"
-    root = find_root(home, root_id)
-    if (root.exchanges / exchange).exists():
+    if (context.exchanges / exchange).exists():
         deadline = time.monotonic() + DATABASE_SECONDS
         if connect is None:
-            connect = settlement_connect(home, root, security, compatibility)
+            connect = installed_postgres(context, security, build_info()[1] if compatibility is None else compatibility)
             await preflight(connect, deadline)
-        async with root_lock(root.exchanges, deadline):
-            if (root.exchanges / exchange).exists():
-                state = await _settle_locked(home, root_id, exchange, security=security, connect=connect,
+        async with root_lock(context.exchanges, deadline):
+            if (context.exchanges / exchange).exists():
+                state = await _settle_locked(context, exchange, security=security, connect=connect,
                                              deadline=deadline)
             else:
                 # The folder existed before we waited: another settler removed it, so report its stored result.
@@ -188,9 +180,9 @@ async def _stored_state(exchange: str, connect: Connect, *, deadline: float) -> 
             await connection.close()
 
 
-async def _settle_locked(home: Path, root_id: str, exchange: str, *, security: str,
+async def _settle_locked(context: Installation, exchange: str, *, security: str,
                          connect: Connect | None, deadline: float) -> str:
-    pending = await open_settlement(home, root_id, exchange, security=security, connect=connect, deadline=deadline)
+    pending = await open_settlement(context, exchange, security=security, connect=connect, deadline=deadline)
     state = "none"
     if pending is not None:
         try:

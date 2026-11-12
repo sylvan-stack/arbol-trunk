@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from .clock import iso
@@ -15,8 +15,8 @@ from .errors import Refusal
 def started_at(pid: int | None = None) -> str:
     pid = os.getpid() if pid is None else pid
     output = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, check=True,
-                            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}, timeout=5).stdout
-    return iso(datetime.strptime(" ".join(output.split()), "%a %b %d %H:%M:%S %Y").astimezone())
+                            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin", "TZ": "UTC"}, timeout=5).stdout
+    return iso(datetime.strptime(" ".join(output.split()), "%a %b %d %H:%M:%S %Y").replace(tzinfo=UTC))
 
 
 def process_alive(process: Any) -> bool:
@@ -25,7 +25,7 @@ def process_alive(process: Any) -> bool:
         raise Refusal("trunk_failed", "The Exchange record names no process.")
     try:
         recorded = datetime.fromisoformat(process["startedAt"])
-        if recorded.tzinfo is None or process["pid"] <= 0:
+        if recorded.tzinfo is None or not 1 <= process["pid"] <= 2147483647:
             raise ValueError("A process needs a positive PID and an absolute start time.")
     except (KeyError, TypeError, ValueError):
         raise Refusal("trunk_failed", "The Exchange record names no readable process start time.") from None

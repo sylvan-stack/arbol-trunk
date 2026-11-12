@@ -25,6 +25,7 @@ from scripts.build_support import (  # noqa: E402
     build_folder,
     digest,
     metadata,
+    source_compatibility,
     source_provenance,
     target,
 )
@@ -91,6 +92,7 @@ def package(candidate: str | None = None, *, root: Path = ROOT) -> Path:
     if any(path.name not in allowed for path in folder.iterdir()):
         raise ValueError("The new package folder already holds files.")
     version, pin, psycopg = metadata(root)
+    compatibility = source_compatibility(root)
     architecture = target()
     distribution = pin["distributions"][architecture]
     compressed = archive(distribution)
@@ -114,7 +116,9 @@ def package(candidate: str | None = None, *, root: Path = ROOT) -> Path:
                     str(folder / "src"), str(folder / "scripts"), str(folder / "tests")],
                    check=True, capture_output=True, cwd=folder)
     manifest = {"format": 1, "component": COMPONENT, "packageVersion": version, "entry": ENTRY,
-                "build": number, "candidate": candidate is not None, "rootContracts": [1],
+                "build": number, "candidate": candidate is not None,
+                "schemaCompatibility": [{"compatibilityVersion": version, "minRevision": minimum}
+                                        for version, minimum in compatibility.items()],
                 "source": source_provenance(root),
                 "python": {"version": pin["version"], "target": architecture, "provider": pin["provider"],
                            "release": pin["release"], "archiveUrl": distribution["url"],

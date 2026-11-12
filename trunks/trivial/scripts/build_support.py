@@ -13,6 +13,10 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from arbol_trunk_trivial.build import schema_compatibility  # noqa: E402
+from arbol_trunk_trivial.build import source_compatibility as source_compatibility  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = "arbol-trunk/trivial"
 PROJECT = "arbol-trunk-trivial"
@@ -61,8 +65,9 @@ def build_folder(candidate: str | None = None, *, root: Path = ROOT) -> tuple[Pa
     version, _pin, _psycopg = metadata(root)
     if (not NUMBER.fullmatch(number) or record.get("build") != number
             or record.get("component") != COMPONENT or record.get("entry") != ENTRY
-            or record.get("packageVersion") != version or record.get("rootContracts") != [1]):
-        raise ValueError("The numbered Build record must match the Trunk, entry, version and Root Contracts.")
+            or record.get("packageVersion") != version
+            or schema_compatibility(record.get("schemaCompatibility")) != source_compatibility(root)):
+        raise ValueError("The numbered Build record must match the Trunk, entry, version and schema compatibility.")
     return folder, number
 
 

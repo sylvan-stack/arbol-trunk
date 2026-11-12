@@ -47,7 +47,8 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
             return await settle_exchange(context, command.options["--exchange"], output=output,
                                          security=security, connect=settle_connect, build=build,
                                          compatibility=compatibility)
-        with Admission(context.runtime).lease("normal", generation=os.environ.get(GENERATION_ENV)) as lease:
+        generation = os.environ.pop(GENERATION_ENV, None)
+        with Admission(context.runtime).lease("normal", generation=generation) as lease:
             if connector is None:
                 connect = installed_postgres(context, security, compatibility, lease=lease)
                 deadline = started + ACCEPTANCE_SECONDS

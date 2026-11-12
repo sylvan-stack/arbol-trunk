@@ -174,19 +174,19 @@ def driver_bridge(launcher: Path, owner: Path, state: Path, driver: Path) -> Non
 def live(folder: Path, *, owner: Path | None = None) -> int:
     owner = owner or Path(pwd.getpwuid(os.getuid()).pw_dir)
     state_text = os.environ.get("ARBOL_BUILD_TEST_STATE_DIR",
-                                str(owner / "Library/Application Support/Arbol/drivers/arbol-claude-driver"))
+                                str(owner / "Library/Application Support/Arbol/drivers/claude"))
     if not state_text or not Path(state_text).is_absolute():
         raise ValueError("live: ARBOL_BUILD_TEST_STATE_DIR must be an absolute Driver state directory.")
     state = Path(state_text).resolve(strict=True)
     info = state.stat()
-    installed = owner / "Library/Application Support/Arbol/drivers/claude"
-    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
-            or state == installed.resolve() or state.is_relative_to(installed.resolve())):
-        raise ValueError("live: use an owner-only test state directory separate from the installed Driver state.")
-    # TRV-D12: an explicitly selected Subscription, signed in in that state directory; test-anthropic by default.
-    subscription = os.environ.get("ARBOL_BUILD_LIVE_SUBSCRIPTION", "test-anthropic")
-    if not re.fullmatch(r"test-[a-z][a-z0-9-]*", subscription):
-        raise ValueError("live: ARBOL_BUILD_LIVE_SUBSCRIPTION must name a dedicated test-* Subscription.")
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("live: the existing Driver state directory must be owner-only.")
+    subscription = os.environ.get("ARBOL_BUILD_LIVE_SUBSCRIPTION", "anthropic")
+    if subscription.startswith("test-") or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", subscription):
+        raise ValueError("live: ARBOL_BUILD_LIVE_SUBSCRIPTION must name a real existing Subscription.")
+    account = read_object(state / "subscriptions" / subscription / "record.json")
+    if account.get("id") != subscription or account.get("family") != "anthropic" or account.get("state") != "signed_in":
+        raise ValueError("live: select a real existing signed-in Anthropic Subscription before inference.")
     arbol, arbol_build = working_build("ARBOL_BUILD_LIVE_ARBOL", "arbol", "bin/arbol")
     driver, driver_build = working_build("ARBOL_BUILD_LIVE_CLAUDE", "arbol-claude-driver", "bin/arbol-claude-driver")
     fixture = LiveInstallation(arbol)

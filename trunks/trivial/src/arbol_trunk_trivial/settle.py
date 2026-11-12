@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import CODE_NAME
+from .admission import GENERATION_ENV, Admission, Lease
 from .build import Compatibility, build_info
 from .claim import exchange_lock
 from .clock import iso
@@ -24,6 +25,7 @@ from .database import (
     StoredExchange,
     installed_postgres,
     preflight,
+    writer_connections,
 )
 from .end import End
 from .errors import Refusal
@@ -164,12 +166,30 @@ def final_end(record: dict[str, Any], found: Replay) -> End:
 async def settle_exchange(context: Installation, exchange: str, *, output: Output,
                           security: str = SECURITY, connect: Connect | None = None,
                           build: str | None = None, compatibility: Compatibility | None = None) -> int:
+    with Admission(context.runtime).lease("controlled", generation=os.environ.get(GENERATION_ENV)) as lease:
+        return await settle_admitted(context, exchange, output=output, security=security, connect=connect,
+                                     build=build, compatibility=compatibility, lease=lease)
+
+
+async def settle_admitted(context: Installation, exchange: str, *, output: Output, security: str,
+                          connect: Connect | None, build: str | None, compatibility: Compatibility | None,
+                          lease: Lease) -> int:
     if build is None or compatibility is None:
         build, compatibility = build_info()
     deadline = time.monotonic() + DATABASE_SECONDS
     if connect is None:
-        connect = installed_postgres(context, security, compatibility)
+        connect = installed_postgres(context, security, compatibility, lease=lease)
         await preflight(connect, deadline)
+    async with writer_connections(connect) as writer:
+        state = await settle_pending(context, exchange, build, connect=writer, deadline=deadline)
+    if state == "open":
+        raise Refusal("trunk_failed", "An open Exchange has no recoverable folder.")
+    output.line(json.dumps({"exchange": exchange, "settled": state}, separators=(",", ":")))
+    return 0
+
+
+async def settle_pending(context: Installation, exchange: str, build: str, *, connect: Connect,
+                         deadline: float) -> str:
     if os.path.lexists(context.exchanges / exchange):
         async with exchange_lock(context.exchanges, deadline):
             if os.path.lexists(context.exchanges / exchange):
@@ -178,10 +198,7 @@ async def settle_exchange(context: Installation, exchange: str, *, output: Outpu
                 state = await _stored_state(exchange, connect, deadline=deadline)
     else:
         state = await _stored_state(exchange, connect, deadline=deadline)
-    if state == "open":
-        raise Refusal("trunk_failed", "An open Exchange has no recoverable folder.")
-    output.line(json.dumps({"exchange": exchange, "settled": state}, separators=(",", ":")))
-    return 0
+    return state
 
 
 async def _stored_state(exchange: str, connect: Connect, *, deadline: float) -> str:

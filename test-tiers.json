@@ -6,7 +6,7 @@
   "counting": "Static definitions and separately labelled programs/scenario functions; not runtime-discovered cases.",
   "mid_review": "Individually reviewed against the raised mid-tier bar under SYL-327; source inspection only, no execution.",
   "counts": {
-    "python_active": 19,
+    "python_active": 20,
     "python_commented": 0,
     "programs_active": 0,
     "node_cases_commented": 0,
@@ -14,10 +14,10 @@
     "programs_commented": 0,
     "entrypoints_guarded": 0,
     "low_removed_previously": 7,
-    "mid_available": 18,
+    "mid_available": 19,
     "mid_by_kind": {
       "entrypoint": 2,
-      "python": 16
+      "python": 17
     },
     "top_available": 3,
     "low_removed_SYL_327": 222,

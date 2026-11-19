@@ -149,7 +149,8 @@ async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, 
         request = run_request(exchange=folder.exchange, chat=exchange.chat, driver=prepared.driver,
                               route=prepared.handed.route, working_folder=prepared.handed.working_folder,
                               history=exchange.history, message=exchange.message,
-                              cue_context=data.cue_context if accepts_cue_context else None)
+                              cue_context=data.cue_context if accepts_cue_context else None,
+                              system_prompt=data.system_prompt)
         request_file = write_request(folder.path, request)
         if any(line.kind == "stop" for line in control.read()):
             return cancelled()

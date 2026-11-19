@@ -1,4 +1,4 @@
-"""The request of the one Driver run, including optional Steady turn context."""
+"""The request of the one Driver run, including optional Steady Cue Cards."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ REQUEST_FILE = "run-1.json"
 
 
 def run_request(*, exchange: str, chat: str, driver: str, route: dict[str, str], working_folder: str,
-                history: list[dict[str, Any]], message: str, cue_context: str | None = None) -> dict[str, Any]:
+                history: list[dict[str, Any]], message: str, cue_context: str | None = None,
+                system_prompt: str | None = None) -> dict[str, Any]:
     request: dict[str, Any] = {"runId": f"{exchange}.1"}
     for name, field in (("subscription", "subscriptionId"), ("model", "model"), ("effort", "effort")):
         if name in route:
@@ -24,6 +25,8 @@ def run_request(*, exchange: str, chat: str, driver: str, route: dict[str, str],
         request["arbolChat"] = True
     if cue_context is not None:
         request["cueContext"] = cue_context
+        if system_prompt:
+            request["systemPrompt"] = system_prompt
     request["tools"] = "all"
     return request
 

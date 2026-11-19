@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from installation_paths import INSTALLATION_LAYOUT
+
 from .errors import Refusal
 
 Mode = Literal["normal", "controlled"]
@@ -110,7 +112,7 @@ def read_state(folder: int) -> State:
         os.close(fd)
     value = json.loads(raw)
     if (not isinstance(value, dict) or value.keys() != {"format", "state", "generation", "source", "session", "release"}
-            or type(value["format"]) is not int or value["format"] != 1):
+            or type(value["format"]) is not int or value["format"] != INSTALLATION_LAYOUT):
         raise ValueError("Unknown admission format.")
     phase, generation, session, release = (value[key] for key in ("state", "generation", "session", "release"))
     if (phase not in ("normal", "draining", "exclusive")

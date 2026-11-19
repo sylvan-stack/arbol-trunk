@@ -8,7 +8,7 @@ Reviewed revision: `d05362c865f8aea86b162c1f7a275c552f48ed43` under SYL-327 (29 
 
 ## Selection and limits
 
-3 top-tier inventory entries and 19 mid-tier entries are available after the higher-bar review. 222 low-tier entries were removed under SYL-327. Definitions, scenarios, programs and entry points overlap; this is not a runtime suite count. Top-tier bodies are unchanged. Retained mid-tier sources remain uncommented.
+The SYL-327 review retained 3 Trivial top-tier entries and 19 mid-tier entries. It removed 222 low-tier entries. AFL-13 adds two Steady top-tier cases. Definitions, scenarios, programs and entry points overlap, so these inventory totals are distinct from runtime suite counts. Retained mid-tier sources remain uncommented.
 
 ## Active top tier
 
@@ -17,6 +17,8 @@ Reviewed revision: `d05362c865f8aea86b162c1f7a275c552f48ed43` under SYL-327 (29 
 | [`test_top_events.Events.test_a_full_file_keeps_only_closures_of_written_starts_usage_finished_and_the_end`](trunks/trivial/tests/top/test_top_events.py#L14) | Crosses the event-file cap after recording starts. Requires gapless numbering and closure/usage/end records for admitted work, while rejecting new work and closures of omitted starts. |
 | [`test_top_replacement.ReplacingAMessage.test_the_transaction_checks_the_target_again_after_the_preliminary_lookup`](trunks/trivial/tests/top/test_top_replacement.py#L17) | Changes the replacement target between preliminary lookup and transactional acceptance. Requires refusal with no new exchange, message deletion or folder leakage, detecting a time-of-check/time-of-use gap. |
 | [`test_top_settle.SavingSettlement.test_two_settlers_both_return_the_stored_state_and_only_one_replays`](trunks/trivial/tests/top/test_top_settle.py#L15) | Schedules two overlapping settlers against the delayed database fixture. Requires identical replies, exactly one stored end, closed connections and one folder cleanup. |
+| [`test_top_qualification.WriterAdmission.test_steady_refuses_exclusive_writer_lock_and_old_layout_marker`](trunks/steady/tests/top/test_top_qualification.py#L18) | Exercises Steady's independent writer reader against a real exclusive lock and then an incompatible marker with the lock free. This catches a fence bypass that the Backend reader's tests cannot detect. |
+| [`test_top_qualification.PhaseReplay.test_phase_replay_preserves_exact_complete_records_before_a_torn_append`](trunks/steady/tests/top/test_top_qualification.py#L58) | Reads an actual torn journal. It preserves exact escaped text and a wide integer in complete records and rejects the uncommitted tail, a crash boundary untouched by ordinary completion. |
 
 ## Layout and shared support
 
@@ -47,6 +49,8 @@ The packaged unit gate no longer stands for the former complete Build qualificat
 ## Builds
 
 Since SYL-329 (29 October 2026) a Build runs the top tier only. Its `unit` check runs every case under `trunks/trivial/tests/top/`. The Root Contract suite (`contract-1`) is mid tier, so `trunks/trivial/arbol-build.json` no longer lists it; run `rct-conformance.py --trunk <entry> --root-contract 1` from `arbol-root` when the owner asks. The `live` check, one real message through the installed Claude Driver, is unchanged. The mid tier runs only when the owner asks for a mid-tier run.
+
+Steady's numbered Build runs `package.integrity` and `unit`. The unit gate runs the packaged top-tier cases with the packaged interpreter and refuses an empty selection. The shared installation lifecycle and real Claude message are recorded separately against the same numbered Build for STE-0.13.
 
 ## Owner-controlled testing and archived examples — SYL-330
 

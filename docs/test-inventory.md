@@ -1,11 +1,13 @@
 # Test inventory: arbol-trunk
 
-SYL-327 source review of `d05362c865f8aea86b162c1f7a275c552f48ed43`. No tests executed. Top selections are unchanged. Entries distinguish Python definitions, scenarios and orchestration; do not sum overlapping entries as runtime cases. Earlier removals retain their original historical rationale; references in those historical reasons describe the suite at their removal date.
+SYL-327 reviewed source at `d05362c865f8aea86b162c1f7a275c552f48ed43` without executing its tests. AFL-13 adds the two Steady cases below. Entries distinguish Python definitions, scenarios and orchestration, so overlapping entries count separately from runtime cases. Earlier removals retain their original historical rationale.
 
 ## Retained selections
 
 | Tier | Kind | Selection | Justification |
 | --- | --- | --- | --- |
+| top | python | [`test_steady_refuses_exclusive_writer_lock_and_old_layout_marker`](../trunks/steady/tests/top/test_top_qualification.py#L18) | Steady's independent writer reader refuses a live exclusive lock and an old marker separately, guarding against layout and fence bypass. |
+| top | python | [`test_phase_replay_preserves_exact_complete_records_before_a_torn_append`](../trunks/steady/tests/top/test_top_qualification.py#L58) | Replays the complete exact bytes from a real torn phase journal, preserving escapes and integer precision while excluding the uncommitted tail. |
 | mid | entrypoint | [`unit`](../trunks/trivial/tests/mid/archived/trunks/trivial/scripts/check_build.py#L137) | Explicit packaged qualification coordinates runtime integrity, retained unit selection or the actual isolated Root/Trunk/Driver/database live boundary; reduced checks do not establish historical full qualification. Since SYL-329 a Build runs only the top tier through this entry; the mid tier runs when the owner asks. |
 | mid | entrypoint | [`live`](../trunks/trivial/tests/mid/archived/trunks/trivial/scripts/check_build.py#L169) | Explicit packaged qualification coordinates runtime integrity, retained unit selection or the actual isolated Root/Trunk/Driver/database live boundary; reduced checks do not establish historical full qualification. Since SYL-329 a Build still runs this live check, one real message (BLD-0.5); it is not a tier test. |
 | mid | python | [`test_the_contract_shell_command_passes_one_executable_path_with_spaces`](../trunks/trivial/tests/mid/test_mid_build_commands.py#L22) | Executes the real configured contract command through a shell with a spaced Build path; an independent argv report detects quoting defects that break release qualification. |

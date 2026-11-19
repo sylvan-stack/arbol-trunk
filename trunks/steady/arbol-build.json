@@ -7,7 +7,7 @@
   ],
   "build": [
     "uv sync --locked --group dev",
-    "uv run --no-sync ruff check ../installation_paths.py src bin/entry.py",
+    "uv run --no-sync ruff check ../installation_paths.py src tests bin/entry.py",
     "uv run --no-sync mypy",
     "uv run --no-sync python ../trivial/scripts/package_build.py --component-dir ."
   ],
@@ -15,6 +15,11 @@
     {
       "name": "package.integrity",
       "command": "uv run --no-sync python ../trivial/scripts/package_build.py --component-dir . --verify"
+    },
+    {
+      "name": "unit",
+      "kind": "unit",
+      "command": "\"$ARBOL_BUILD_DIR/runtime/python/bin/python3.14\" -I -B \"$ARBOL_BUILD_DIR/tests/top/test_top_qualification.py\""
     }
   ]
 }

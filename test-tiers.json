@@ -6,7 +6,7 @@
   "counting": "Static definitions and separately labelled programs/scenario functions; not runtime-discovered cases.",
   "mid_review": "Individually reviewed against the raised mid-tier bar under SYL-327; source inspection only, no execution.",
   "counts": {
-    "python_active": 20,
+    "python_active": 22,
     "python_commented": 0,
     "programs_active": 0,
     "node_cases_commented": 0,
@@ -19,11 +19,43 @@
       "entrypoint": 2,
       "python": 17
     },
-    "top_available": 3,
+    "top_available": 5,
     "low_removed_SYL_327": 222,
     "low_removed_total": 229
   },
   "tests": [
+    {
+      "repo": "arbol-trunk",
+      "file": "trunks/steady/tests/top/test_top_qualification.py",
+      "id": "trunks/steady/tests/top/test_top_qualification.py::WriterAdmission.test_steady_refuses_exclusive_writer_lock_and_old_layout_marker",
+      "name": "test_steady_refuses_exclusive_writer_lock_and_old_layout_marker",
+      "class": "WriterAdmission",
+      "kind": "python",
+      "tier": "top",
+      "status": "active",
+      "reason": "Exercises Steady's independent writer reader against the filesystem lock and incompatible marker separately to detect fence or layout bypass.",
+      "review": "individual",
+      "line": 18,
+      "file_sha256": "3423359ba66e52553fdf3c5aedeef3e01dadf499fe9ad46ffaeca30ac81517da",
+      "selector": "test_top_qualification.WriterAdmission.test_steady_refuses_exclusive_writer_lock_and_old_layout_marker",
+      "added_by": "AFL-13"
+    },
+    {
+      "repo": "arbol-trunk",
+      "file": "trunks/steady/tests/top/test_top_qualification.py",
+      "id": "trunks/steady/tests/top/test_top_qualification.py::PhaseReplay.test_phase_replay_preserves_exact_complete_records_before_a_torn_append",
+      "name": "test_phase_replay_preserves_exact_complete_records_before_a_torn_append",
+      "class": "PhaseReplay",
+      "kind": "python",
+      "tier": "top",
+      "status": "active",
+      "reason": "Actual torn journal replay preserves the exact complete bytes, including escapes and a wide integer, and discards the incomplete append.",
+      "review": "individual",
+      "line": 58,
+      "file_sha256": "3423359ba66e52553fdf3c5aedeef3e01dadf499fe9ad46ffaeca30ac81517da",
+      "selector": "test_top_qualification.PhaseReplay.test_phase_replay_preserves_exact_complete_records_before_a_torn_append",
+      "added_by": "AFL-13"
+    },
     {
       "repo": "arbol-trunk",
       "file": "trunks/trivial/tests/mid/archived/trunks/trivial/scripts/check_build.py",

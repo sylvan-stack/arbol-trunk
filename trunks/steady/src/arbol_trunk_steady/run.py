@@ -73,7 +73,7 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
 
     async def execute(data: ExchangeData) -> End:
         details.enter("execution")
-        return await execution(prepared, exchange, events, maker, saver, search_path, life, data)
+        return await execution(prepared, exchange, events, maker, saver, search_path, life, data, details)
 
     try:
         try:
@@ -124,7 +124,7 @@ def folder_failed(error: OSError | None) -> End:
 
 
 async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, maker: RowMaker, saver: Saver,
-                    search_path: str | None, life: SignsOfLife, data: ExchangeData) -> End:
+                    search_path: str | None, life: SignsOfLife, data: ExchangeData, details: PhaseDetails) -> End:
     """Run the selected Driver once and return the Exchange outcome."""
     if events.error is not None or life.error is not None:
         return folder_failed(events.error or life.error)
@@ -141,7 +141,8 @@ async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, 
             accepts_cue_context = await life.wait(
                 capabilities(launcher, prepared.driver, prepared.handed.route.get("subscription"),
                              prepared.handed.working_folder, prepared.installation.home,
-                             lambda: any(line.kind == "stop" for line in control.read())), "driver")
+                             lambda: any(line.kind == "stop" for line in control.read()), details.subprocess),
+                "driver")
         except CapabilityStopped:
             return cancelled()
         except CapabilityError as error:
@@ -159,7 +160,10 @@ async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, 
         if any(line.kind == "stop" for line in control.read()):
             return cancelled()
         try:
-            run = await life.wait(DriverRun.start(launcher, request_file, prepared.handed.working_folder), "driver")
+            run = await life.wait(DriverRun.start(
+                launcher, request_file, prepared.handed.working_folder,
+                lambda argv, cwd: details.subprocess(argv, cwd, parameters=request),
+            ), "driver")
         except OSError as error:
             return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
         over = await drive(run, events, maker, saver, control, life=life)

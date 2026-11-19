@@ -23,6 +23,7 @@ READ_SIZE = 65536
 EXIT_POLL_SECONDS = 0.01
 CAPABILITY_SECONDS = 5.0
 CAPABILITY_BYTES = 256 * 1024
+type CommandObserver = Callable[[list[str], str], None]
 
 
 class CapabilityError(Exception):
@@ -64,12 +65,16 @@ def migration_ready(home: Path, driver: str, subscription: str | None) -> None:
         raise CapabilityError("The Pi migration marker is invalid; repair or explicitly restore it.") from None
 
 
-async def capability_query(launcher: str, arguments: list[str], cwd: str, stopped: Callable[[], bool]) -> Any:
+async def capability_query(launcher: str, arguments: list[str], cwd: str, stopped: Callable[[], bool],
+                           on_started: CommandObserver | None = None) -> Any:
     if stopped():
         raise CapabilityStopped
+    argv = [launcher, *arguments]
     process = await asyncio.create_subprocess_exec(
-        launcher, *arguments, cwd=cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        *argv, cwd=cwd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL)
+    if on_started is not None:
+        on_started(argv, cwd)
 
     async def collect() -> bytes:
         assert process.stdout is not None
@@ -105,14 +110,14 @@ async def capability_query(launcher: str, arguments: list[str], cwd: str, stoppe
 
 
 async def capabilities(launcher: str, driver: str, subscription: str | None, cwd: str, home: Path,
-                       stopped: Callable[[], bool]) -> bool:
+                       stopped: Callable[[], bool], on_started: CommandObserver | None = None) -> bool:
     migration_ready(home, driver, subscription)
-    info = await capability_query(launcher, ["info"], cwd, stopped)
+    info = await capability_query(launcher, ["info"], cwd, stopped, on_started)
     if (not isinstance(info, dict) or info.get("driver") != driver
             or type(info.get("contract")) is not int or info["contract"] not in (1, 2)):
         raise CapabilityError("The launcher does not offer the selected Driver and a supported contract (1 or 2).")
-    families = await capability_query(launcher, ["subscriptions", "families"], cwd, stopped)
-    records = await capability_query(launcher, ["subscriptions", "list"], cwd, stopped)
+    families = await capability_query(launcher, ["subscriptions", "families"], cwd, stopped, on_started)
+    records = await capability_query(launcher, ["subscriptions", "list"], cwd, stopped, on_started)
     if (not isinstance(families, list) or not families or not isinstance(records, list) or not records
             or any(not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in families)
             or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
@@ -206,10 +211,14 @@ class DriverRun:
         self.refusal: str | None = None
 
     @classmethod
-    async def start(cls, launcher: str, request_file: Path, working_folder: str) -> DriverRun:
+    async def start(cls, launcher: str, request_file: Path, working_folder: str,
+                    on_started: CommandObserver | None = None) -> DriverRun:
+        argv = [launcher, "run", "--control", "--request", str(request_file)]
         process = await asyncio.create_subprocess_exec(
-            launcher, "run", "--control", "--request", str(request_file), cwd=working_folder,
+            *argv, cwd=working_folder,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=None)
+        if on_started is not None:
+            on_started(argv, working_folder)
         return cls(process)
 
     @property

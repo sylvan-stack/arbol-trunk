@@ -56,11 +56,39 @@ class PhaseDetails:
             self.record(finishedAt=data.finished_at)
             self.current = None
 
+    def intake_output(self, data: ExchangeData) -> None:
+        self.private["intake"].values["systemPrompt"] = data.system_prompt
+        self.public.cue_context = data.cue_context
+        self.public.system_prompt = data.system_prompt
+        self.record(privatePhase={"systemPrompt": data.system_prompt},
+                    publicExchange={"cueContext": data.cue_context, "systemPrompt": data.system_prompt})
+
+    def subprocess(self, argv: list[str], cwd: str, *, standard_input: Any = None,
+                   parameters: dict[str, Any] | None = None) -> None:
+        entry: dict[str, Any] = {
+            "kind": "provider" if parameters is not None else "subprocess",
+            "command": argv[0], "arguments": argv[1:], "workingDirectory": cwd,
+        }
+        if standard_input is not None:
+            entry["input"] = standard_input
+        if parameters is not None:
+            entry["parameters"] = parameters
+        self.add_command(entry)
+
+    def add_command(self, entry: dict[str, Any]) -> None:
+        if self.current is not None:
+            self.private[self.current].commands.append(entry)
+            self.record(command=entry)
+
     def record(self, **values: Any) -> None:
         if self.current is None:
             return
+        try:
+            entry = json.dumps({"n": self.position + 1, "phase": self.current, **values},
+                               separators=(",", ":"), allow_nan=False)
+        except (ValueError, RecursionError):
+            return
         self.position += 1
-        entry = json.dumps({"n": self.position, "phase": self.current, **values}, separators=(",", ":"))
         if self.journal_available:
             try:
                 flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW

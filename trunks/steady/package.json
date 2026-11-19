@@ -1,0 +1,11 @@
+{
+  "name": "@sylvan-stack/arbol-trunk-steady",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Steady Trunk: phased processing of Arbol Chat Exchanges.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sylvan-stack/arbol-trunk.git",
+    "directory": "trunks/steady"
+  }
+}

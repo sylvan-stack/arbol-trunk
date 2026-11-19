@@ -74,7 +74,12 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
 
     try:
         try:
-            end = await phases.intake(prepared.installation.home, folder.path, exchange.message, execute)
+            earlier_messages = [
+                item["text"] for item in exchange.history
+                if item.get("type") == "message" and item.get("role") == "user" and isinstance(item.get("text"), str)
+            ]
+            end = await phases.intake(prepared.installation.home, folder.path, exchange.message,
+                                      earlier_messages, execute)
         except OSError as error:
             life.error = error
             end = folder_failed(error)

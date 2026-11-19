@@ -1,22 +1,11 @@
-"""`run`: one Exchange from the message to its end (TRV-0, "One Exchange, one run").
-
-1. It accepts the message as RCT-2 says, reading the history in the same transaction.
-2. It writes the request of the run, `run-1.json`, into the Exchange's folder.
-3. It starts the Driver through its launcher, as `run` with a control input and the request file. Just before, it reads
-   `control`: after a stop line it starts no run, and the Exchange ends as cancelled.
-4. It hands every event of the run to `events.jsonl` and, through the saving task, to the chat tables.
-5. When the run is over, it ends the Exchange with the run's outcome.
-
-The work is one loop in one thread (TRV-D9): each round waits at most one second (divided by ARBOL_TEST_TIME_SCALE) for
-output of the Driver, appends what arrived, and comes round again. The run is over when the Driver's process has ended
-and its output has been read to the end, for at most one second after the process ended.
-"""
+"""Run an Exchange through durable acceptance, Steady's phases, and persistence of the end (STE-0)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
+from . import phases
 from .accept import Exchange, Repeated, accept_message
 from .clock import UPTIME, Clock, scaled
 from .control import ControlFile
@@ -81,10 +70,9 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     saver.start()
     try:
         try:
-            if events.error is not None or life.error is not None:
-                end = folder_failed(events.error or life.error)
-            else:
-                end = await one_run(prepared, exchange, events, maker, saver, search_path, life)
+            phases.intake()
+            phases.planning()
+            end = await execution(prepared, exchange, events, maker, saver, search_path, life)
         except OSError as error:
             life.error = error
             end = folder_failed(error)
@@ -93,6 +81,7 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
         await saver.stop()
         if saver.rejected is not None and events.error is None and life.error is None:
             end = failed("trunk_failed", str(saver.rejected))
+        end = phases.finalization(end)
         try:
             if events.error is None and life.error is None:
                 if events.end_fills(end.value()):
@@ -123,8 +112,11 @@ def folder_failed(error: OSError | None) -> End:
     return failed("folder_unwritable", f"The Exchange's folder cannot be written: {error}.")
 
 
-async def one_run(prepared: Prepared, exchange: Exchange, events: EventsFile, maker: RowMaker, saver: Saver,
-                  search_path: str | None, life: SignsOfLife) -> End:
+async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, maker: RowMaker, saver: Saver,
+                    search_path: str | None, life: SignsOfLife) -> End:
+    """Run the selected Driver once and return the Exchange outcome."""
+    if events.error is not None or life.error is not None:
+        return folder_failed(events.error or life.error)
     folder = exchange.folder
     launcher = find_launcher(prepared.driver, search_path)
     if launcher is None:

@@ -9,11 +9,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from installation_paths import installation_root
+
 from . import CODE_NAME
 
 
 def settings_file(home: Path) -> Path:
-    return home / ".arbol" / "arbol-trunk" / f"{CODE_NAME}.json"
+    return installation_root(home) / "arbol-trunk" / f"{CODE_NAME}.json"
 
 
 def default_driver(home: Path) -> str | None:

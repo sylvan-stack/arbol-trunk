@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from installation_paths import installation_root
+
 READ_SIZE = 65536
 EXIT_POLL_SECONDS = 0.01
 CAPABILITY_SECONDS = 5.0
@@ -34,7 +36,7 @@ class CapabilityStopped(Exception):
 
 
 def migration_ready(home: Path, driver: str, subscription: str | None) -> None:
-    path = home / ".arbol/pi-cutover.json"
+    path = installation_root(home) / "pi-cutover.json"
     try:
         raw = path.read_bytes()
     except FileNotFoundError:

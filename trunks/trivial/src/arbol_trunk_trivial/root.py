@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from installation_paths import installation_root, runtime_folder
+
 from .errors import Refusal
 
 KEYCHAIN_SERVICE = "com.sylvan-stack.arbol.database"
@@ -32,7 +34,7 @@ class InstalledDatabase:
 def installed_database(home: Path) -> InstalledDatabase:
     """Read the one target, with an owner-only socket available for an isolated installation."""
     try:
-        settings = read_json(home / ".arbol/database.json")
+        settings = read_json(installation_root(home) / "database.json")
         if not isinstance(settings, dict) or set(settings) != {"address", "database"}:
             raise ValueError
         address, name = settings["address"], settings["database"]
@@ -52,7 +54,7 @@ def installed_database(home: Path) -> InstalledDatabase:
         if socket:
             directory = Path(host).resolve(strict=True)
             mode = directory.stat()
-            installed_socket = home / "Library/Application Support/Arbol/database/socket"
+            installed_socket = installation_root(home) / "postgres/socket"
             if ("," in str(directory) or directory == installed_socket.resolve()
                     or not stat.S_ISDIR(mode.st_mode) or mode.st_uid != os.getuid() or mode.st_mode & 0o077):
                 raise ValueError
@@ -81,7 +83,7 @@ class Installation:
 
 def installation(home: Path) -> Installation:
     target = installed_database(home)
-    runtime = home / "Library/Application Support/Arbol/runtime"
+    runtime = runtime_folder(home)
     bin_dir = home / ".local/bin"
     if target.socket:
         runtime = Path(os.environ.get("ARBOL_EXCHANGE_RUNTIME_DIR", runtime))

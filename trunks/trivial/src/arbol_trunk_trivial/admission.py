@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from installation_paths import runtime_folder as runtime_folder
+
 from .errors import Refusal
 
 Mode = Literal["normal", "controlled"]
@@ -33,10 +35,6 @@ GENERATION_ENV = "ARBOL_EXCHANGE_ADMISSION_GENERATION"
 DATABASE_WRITER_LOCK = 0x4152424F4C575254
 TOKEN = re.compile(r"[0-9a-f]{32}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
-
-
-def runtime_folder(home: Path | None = None) -> Path:
-    return (home or Path.home()) / "Library/Application Support/Arbol/runtime"
 
 
 def private_dir(descriptor: int) -> None:

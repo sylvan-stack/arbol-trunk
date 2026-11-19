@@ -109,6 +109,7 @@ def package(candidate: str | None = None, *, root: Path = ROOT) -> Path:
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
     for name in ("src", "tests", "scripts", "bin"):
         shutil.copytree(root / name, folder / name, ignore=ignore)
+    shutil.copy2(root.parent / "installation_paths.py", folder / "src/installation_paths.py")
     for name in ("package.json", "pyproject.toml", ".python-version", "uv.lock", "arbol-build.json", "README.md"):
         shutil.copy2(root / name, folder / name)
     # Child processes of the unit fixtures sometimes omit -B. Prebuild their caches so checks do not mutate the image.

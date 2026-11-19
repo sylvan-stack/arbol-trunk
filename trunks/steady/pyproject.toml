@@ -14,7 +14,7 @@ package = false
 [tool.mypy]
 python_version = "3.14"
 strict = true
-mypy_path = ["src"]
+mypy_path = ["src", ".."]
 files = ["src/arbol_trunk_steady", "bin/entry.py"]
 
 [tool.ruff]

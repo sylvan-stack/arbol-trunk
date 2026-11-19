@@ -1,0 +1,20 @@
+{
+  "component": "arbol-trunk/steady",
+  "installationLayout": 2,
+  "entry": "bin/arbol-trunk-steady",
+  "schemaCompatibility": [
+    { "compatibilityVersion": 1, "minRevision": 1 }
+  ],
+  "build": [
+    "uv sync --locked --group dev",
+    "uv run --no-sync ruff check ../installation_paths.py src bin/entry.py",
+    "uv run --no-sync mypy",
+    "uv run --no-sync python ../trivial/scripts/package_build.py --component-dir ."
+  ],
+  "checks": [
+    {
+      "name": "package.integrity",
+      "command": "uv run --no-sync python ../trivial/scripts/package_build.py --component-dir . --verify"
+    }
+  ]
+}

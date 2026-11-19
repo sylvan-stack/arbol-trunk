@@ -22,6 +22,19 @@ The Build must pass `unit` (the top-tier packaged tests, integrity, imports and 
 
 See the [Trivial Trunk README](trunks/trivial/README.md) for development and offline checks. The [specification](https://github.com/sylvan-stack/arbol-trunk-artifacts/blob/main/trunks/trivial/specs/00-the-trivial-trunk.md) defines the behavior and Build checks.
 
+## Steady Build
+
+The Build Tool reads `trunks/steady/arbol-build.json` and uses the same
+packager as Trivial. The package gate verifies the numbered entry and its file
+manifest. Release qualification also covers Steady's unit checks, the shared
+installation lifecycle and a real Claude Driver message.
+
+The layout-2 launcher uses `~/.arbol/builds/` and accepts
+`arbol-trunk steady [-v <build>] <command>`. Both Trunks use
+`~/.arbol/runtime/` for admission and pending Exchanges. Steady starts on
+schema compatibility version 1 from revision 1 and persists phase details
+starting at revision 4.
+
 ## Sylvan Stack 2
 
 | Repository | Package | Version | Artifact corpus | Artifact repository |

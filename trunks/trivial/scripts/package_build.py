@@ -1,4 +1,4 @@
-"""Package the Trivial Trunk and its checksum-pinned standalone interpreter (TRV-D20)."""
+"""Package a Trunk and its checksum-pinned standalone interpreter (TRV-D20)."""
 
 from __future__ import annotations
 
@@ -19,12 +19,12 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.build_support import (  # noqa: E402
-    COMPONENT,
-    ENTRY,
+    INSTALLATION_LAYOUT,
     ROOT,
     build_folder,
     digest,
     metadata,
+    read_object,
     source_compatibility,
     source_provenance,
     target,
@@ -82,17 +82,18 @@ def copy_dependencies(folder: Path, version: str, *, installed: Path | None = No
 
 
 def package(candidate: str | None = None, *, root: Path = ROOT) -> Path:
-    folder, number = build_folder(candidate, root=root)
     root = root.resolve()
+    code = root.name
+    if root.parent.name != "trunks" or code not in {"trivial", "steady"}:
+        raise ValueError("Choose trunks/trivial or trunks/steady as the Trunk source.")
+    folder, number = build_folder(candidate, root=root, code=code)
     if folder == root or folder in root.parents or root in folder.parents:
         raise ValueError("The package cannot overlap its source.")
-    if root.parts[-2:] != ("trunks", "trivial"):
-        raise ValueError("The component's source must be in trunks/trivial.")
     allowed = set() if candidate is not None else {"build.json", "build.log"}
     if any(path.name not in allowed for path in folder.iterdir()):
         raise ValueError("The new package folder already holds files.")
-    version, pin, psycopg = metadata(root)
-    compatibility = source_compatibility(root)
+    version, pin, psycopg = metadata(root, code=code)
+    compatibility = source_compatibility(root, code=code)
     architecture = target()
     distribution = pin["distributions"][architecture]
     compressed = archive(distribution)
@@ -107,16 +108,22 @@ def package(candidate: str | None = None, *, root: Path = ROOT) -> Path:
         raise ValueError("The unpacked interpreter has the wrong version.")
     copy_dependencies(folder, psycopg)
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store")
-    for name in ("src", "tests", "scripts", "bin"):
+    directories = ["src", "scripts", "bin"]
+    if code == "trivial" or (root / "tests").is_dir():
+        directories.append("tests")
+    for name in directories:
         shutil.copytree(root / name, folder / name, ignore=ignore)
     shutil.copy2(root.parent / "installation_paths.py", folder / "src/installation_paths.py")
-    for name in ("package.json", "pyproject.toml", ".python-version", "uv.lock", "arbol-build.json", "README.md"):
+    for name in ("package.json", "pyproject.toml", ".python-version", "uv.lock", "arbol-build.json"):
         shutil.copy2(root / name, folder / name)
+    if (root / "README.md").is_file():
+        shutil.copy2(root / "README.md", folder / "README.md")
     # Child processes of the unit fixtures sometimes omit -B. Prebuild their caches so checks do not mutate the image.
     subprocess.run([str(interpreter), "-I", "-m", "compileall", "-q", "-j", "2", str(runtime / "python/lib/python3.14"),
-                    str(folder / "src"), str(folder / "scripts"), str(folder / "tests")],
+                    *(str(folder / name) for name in directories if name != "bin")],
                    check=True, capture_output=True, cwd=folder)
-    manifest = {"format": 1, "component": COMPONENT, "packageVersion": version, "entry": ENTRY,
+    manifest = {"format": 1, "component": f"arbol-trunk/{code}", "packageVersion": version,
+                "entry": f"bin/arbol-trunk-{code}", "installationLayout": INSTALLATION_LAYOUT,
                 "build": number, "candidate": candidate is not None,
                 "schemaCompatibility": [{"compatibilityVersion": version, "minRevision": minimum}
                                         for version, minimum in compatibility.items()],
@@ -130,16 +137,39 @@ def package(candidate: str | None = None, *, root: Path = ROOT) -> Path:
     return folder
 
 
+def verify_package(root: Path) -> Path:
+    """Check registered package identity and payload before marking the Build working."""
+    code = root.name
+    folder, number = build_folder(root=root, code=code)
+    manifest = read_object(folder / "package-manifest.json")
+    record = read_object(folder / "build.json")
+    if (
+        manifest.get("format") != 1 or manifest.get("build") != number or manifest.get("candidate") is not False
+        or any(manifest.get(key) != record.get(key)
+               for key in ("installationLayout", "schemaCompatibility", "component", "entry", "packageVersion"))
+        or manifest.get("source") != source_provenance(root)
+        or manifest.get("files") != file_digests(folder)
+        or not os.access(folder / f"bin/arbol-trunk-{code}", os.X_OK)
+    ):
+        raise ValueError("The Trunk package identity or payload differs from its declared Build.")
+    return folder
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--component-dir", type=Path, default=ROOT, help="Component source directory")
     parser.add_argument("--candidate", help="Absolute empty development folder, outside the registry")
+    parser.add_argument("--verify", action="store_true", help="Verify an existing numbered package")
     args = parser.parse_args()
+    if args.verify and args.candidate:
+        parser.error("--verify requires a numbered Build")
+    root = args.component_dir.resolve()
     try:
-        folder = package(args.candidate)
+        folder = verify_package(root) if args.verify else package(args.candidate, root=root)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError, tarfile.TarError) as error:
-        print(f"Cannot package {COMPONENT}: {error}", file=sys.stderr)
+        print(f"Cannot prepare Trunk package: {error}", file=sys.stderr)
         return 1
-    print(f"Packaged {COMPONENT} in {folder}")
+    print(f"Trunk package ready in {folder}")
     return 0
 
 

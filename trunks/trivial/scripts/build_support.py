@@ -13,11 +13,14 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from arbol_trunk_trivial.build import schema_compatibility  # noqa: E402
-from arbol_trunk_trivial.build import source_compatibility as source_compatibility  # noqa: E402
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+if ROOT.parent.name == "trunks":
+    sys.path.insert(1, str(ROOT.parent))
+from installation_paths import INSTALLATION_LAYOUT as INSTALLATION_LAYOUT  # noqa: E402
+
+from arbol_trunk_trivial.build import matches_layout, schema_compatibility  # noqa: E402
+
 COMPONENT = "arbol-trunk/trivial"
 PROJECT = "arbol-trunk-trivial"
 ENTRY = "bin/arbol-trunk-trivial"
@@ -31,12 +34,12 @@ def read_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def metadata(root: Path = ROOT) -> tuple[str, dict[str, Any], str]:
+def metadata(root: Path = ROOT, *, code: str = "trivial") -> tuple[str, dict[str, Any], str]:
     project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
     package = read_object(root / "package.json")
     version = project.get("version")
     pin = read_object(root / "scripts/python-distribution.json")
-    if (project.get("name") != PROJECT or not isinstance(version, str)
+    if (project.get("name") != f"arbol-trunk-{code}" or not isinstance(version, str)
             or package.get("version") != version):
         raise ValueError("The project and package metadata must name this Trunk and agree on its version.")
     if (project.get("requires-python") != "==" + str(pin.get("version"))
@@ -51,7 +54,15 @@ def metadata(root: Path = ROOT) -> tuple[str, dict[str, Any], str]:
     return version, pin, psycopg
 
 
-def build_folder(candidate: str | None = None, *, root: Path = ROOT) -> tuple[Path, str]:
+def source_compatibility(root: Path, *, code: str = "trivial") -> dict[int, int]:
+    config = read_object(root / "arbol-build.json")
+    if (config.get("component") != f"arbol-trunk/{code}" or config.get("entry") != f"bin/arbol-trunk-{code}"
+            or not matches_layout(config)):
+        raise ValueError("The Build description must name the Trunk and declare the active layout.")
+    return schema_compatibility(config.get("schemaCompatibility"))
+
+
+def build_folder(candidate: str | None = None, *, root: Path = ROOT, code: str = "trivial") -> tuple[Path, str]:
     raw = candidate if candidate is not None else os.environ.get("ARBOL_BUILD_DIR", "")
     if not raw or not Path(raw).is_absolute():
         raise ValueError("The Build folder must be absolute: ARBOL_BUILD_DIR or --candidate.")
@@ -62,12 +73,13 @@ def build_folder(candidate: str | None = None, *, root: Path = ROOT) -> tuple[Pa
         return folder, "0"
     number = os.environ.get("ARBOL_BUILD_NUMBER", "")
     record = read_object(folder / "build.json")
-    version, _pin, _psycopg = metadata(root)
+    version, _pin, _psycopg = metadata(root, code=code)
     if (not NUMBER.fullmatch(number) or record.get("build") != number
-            or record.get("component") != COMPONENT or record.get("entry") != ENTRY
+            or record.get("component") != f"arbol-trunk/{code}" or record.get("entry") != f"bin/arbol-trunk-{code}"
             or record.get("packageVersion") != version
-            or schema_compatibility(record.get("schemaCompatibility")) != source_compatibility(root)):
-        raise ValueError("The numbered Build record must match the Trunk, entry, version and schema compatibility.")
+            or not matches_layout(record)
+            or schema_compatibility(record.get("schemaCompatibility")) != source_compatibility(root, code=code)):
+        raise ValueError("The numbered Build record differs from the Trunk's entry, version, layout or schema fit.")
     return folder, number
 
 

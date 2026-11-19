@@ -26,6 +26,7 @@ from arbol_trunk_trivial.build import schema_compatibility, source_compatibility
 from scripts.build_support import (  # noqa: E402
     COMPONENT,
     ENTRY,
+    INSTALLATION_LAYOUT,
     NUMBER,
     build_folder,
     digest,
@@ -39,19 +40,21 @@ from scripts.package_build import MUTABLE  # noqa: E402
 def program_policy(folder: Path, manifest: dict[str, Any]) -> None:
     """Check the program's imports and identity without importing unchecked source (RCT-0)."""
     source = folder / "src"
-    if {item.name for item in source.iterdir() if item.name != "__pycache__"} != {"arbol_trunk_trivial"}:
-        raise ValueError("The package must contain only the Trivial Trunk's source.")
+    if {item.name for item in source.iterdir() if item.name != "__pycache__"} != {
+        "arbol_trunk_trivial", "installation_paths.py",
+    }:
+        raise ValueError("The package must contain only Trivial's source and its shared installation paths.")
     if manifest.get("source", {}).get("componentPath") != "trunks/trivial":
         raise ValueError("The source must come from trunks/trivial.")
     description = read_object(folder / "arbol-build.json")
     package = read_object(folder / "package.json")
     if (description.get("component") != COMPONENT or description.get("entry") != ENTRY
-            or "rootContracts" in description
+            or "rootContracts" in description or description.get("installationLayout") != INSTALLATION_LAYOUT
             or schema_compatibility(manifest.get("schemaCompatibility")) != source_compatibility(folder)
             or package.get("name") != "@sylvan-stack/arbol-trunk-trivial"
             or package.get("repository", {}).get("directory") != "trunks/trivial"):
         raise ValueError("The Build description must name this Trunk, its entry and schema compatibility.")
-    allowed = sys.stdlib_module_names | {"arbol_trunk_trivial", "psycopg"}
+    allowed = sys.stdlib_module_names | {"arbol_trunk_trivial", "installation_paths", "psycopg"}
     files = [*source.rglob("*.py"), folder / "bin/entry.py"]
     for path in files:
         tree = ast.parse(path.read_text(), filename=str(path))
@@ -67,7 +70,7 @@ def program_policy(folder: Path, manifest: dict[str, Any]) -> None:
                 imports = [node.module or ""]
             for name in imports:
                 if name.split(".")[0] not in allowed:
-                    raise ValueError(f"The program imports {name}, outside the standard library and psycopg.")
+                    raise ValueError(f"The program imports {name}, outside the allowed Trivial package dependencies.")
         if path.name == "__init__.py" and path.parent == source / "arbol_trunk_trivial":
             constants = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
                          if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
@@ -106,6 +109,7 @@ def verify(folder: Path, *, candidate: bool) -> dict[str, Any]:
     compatibility = source_compatibility(folder)
     if (value.get("format") != 1 or value.get("component") != COMPONENT or value.get("entry") != ENTRY
             or value.get("packageVersion") != version or "rootContracts" in value
+            or value.get("installationLayout") != INSTALLATION_LAYOUT
             or schema_compatibility(value.get("schemaCompatibility")) != compatibility
             or value.get("candidate") is not candidate
             or value.get("dependencies") != {"psycopg": psycopg, "psycopg-binary": psycopg}):
@@ -118,6 +122,7 @@ def verify(folder: Path, *, candidate: bool) -> dict[str, Any]:
         if (record.get("component") != COMPONENT or record.get("build") != value.get("build")
                 or not isinstance(record.get("build"), str) or not NUMBER.fullmatch(record["build"])
                 or record.get("entry") != ENTRY or record.get("packageVersion") != version
+                or record.get("installationLayout") != INSTALLATION_LAYOUT
                 or "rootContracts" in record or schema_compatibility(record.get("schemaCompatibility")) != compatibility):
             raise ValueError("The package and numbered Build record differ.")
     python = value.get("python")
@@ -164,17 +169,19 @@ def driver_bridge(launcher: Path, owner: Path, state: Path, driver: Path) -> Non
     if not driver.is_file() or not os.access(driver, os.X_OK):
         raise ValueError("The live check needs the selected Claude Driver Build executable.")
     quote = shlex.quote
-    # claude finds its Keychain login under the account named by USER; without it the login is invisible.
-    launcher.write_text("#!/bin/sh\n" + f"HOME={quote(str(owner))} USER={quote(pwd.getpwuid(os.getuid()).pw_name)} "
-                        f"PATH={quote(str(owner / '.local/bin') + ':/usr/bin:/bin:/usr/sbin:/sbin')} "
+    # Keep the fixture HOME. The native Claude login still uses the OS account.
+    user = quote(pwd.getpwuid(os.getuid()).pw_name)
+    path = os.pathsep.join((os.environ.get("PATH", os.defpath), str(owner / ".local/bin"), "/usr/sbin", "/sbin"))
+    launcher.write_text("#!/bin/sh\n" + f"USER={user} LOGNAME={user} PATH={quote(path)} "
                         f"exec {quote(str(driver))} --state-dir {quote(str(state))} \"$@\"\n")
-    launcher.chmod(0o755)
+    launcher.chmod(0o700)
 
 
 def live(folder: Path, *, owner: Path | None = None) -> int:
+    from installation_paths import installation_root
+
     owner = owner or Path(pwd.getpwuid(os.getuid()).pw_dir)
-    state_text = os.environ.get("ARBOL_BUILD_TEST_STATE_DIR",
-                                str(owner / "Library/Application Support/Arbol/drivers/claude"))
+    state_text = os.environ.get("ARBOL_BUILD_TEST_STATE_DIR", str(installation_root(owner) / "drivers/claude"))
     if not state_text or not Path(state_text).is_absolute():
         raise ValueError("live: ARBOL_BUILD_TEST_STATE_DIR must be an absolute Driver state directory.")
     state = Path(state_text).resolve(strict=True)
@@ -185,13 +192,22 @@ def live(folder: Path, *, owner: Path | None = None) -> int:
     if subscription.startswith("test-") or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", subscription):
         raise ValueError("live: ARBOL_BUILD_LIVE_SUBSCRIPTION must name a real existing Subscription.")
     account = read_object(state / "subscriptions" / subscription / "record.json")
-    if account.get("id") != subscription or account.get("family") != "anthropic" or account.get("state") != "signed_in":
-        raise ValueError("live: select a real existing signed-in Anthropic Subscription before inference.")
+    if (account.get("id") != subscription or account.get("family") != "anthropic"
+            or account.get("state") != "signed_in" or account.get("auth") != "vendor_login"):
+        raise ValueError("live: select an existing signed-in Claude vendor login before inference.")
     arbol, arbol_build = working_build("ARBOL_BUILD_LIVE_ARBOL", "arbol", "bin/arbol")
     driver, driver_build = working_build("ARBOL_BUILD_LIVE_CLAUDE", "arbol-claude-driver", "bin/arbol-claude-driver")
     fixture = LiveInstallation(arbol)
     try:
-        driver_bridge(fixture.bin / "arbol-claude-driver", owner, state, driver / "bin/arbol-claude-driver")
+        drivers = installation_root(fixture.home) / "drivers"
+        driver_state = drivers / "claude"
+        subscription_folder = driver_state / "subscriptions" / subscription
+        for directory in (drivers, driver_state, subscription_folder.parent, subscription_folder):
+            directory.mkdir(mode=0o700)
+        private_record = subscription_folder / "record.json"
+        private_record.touch(mode=0o600, exist_ok=False)
+        private_record.write_text(json.dumps(account))
+        driver_bridge(fixture.bin / "arbol-claude-driver", owner, driver_state, driver / "bin/arbol-claude-driver")
         status, output = fixture.run(folder / ENTRY, subscription)
         if status != 0:
             print(json.dumps({"check": "live", "passed": False, "exitStatus": status, "output": output}), flush=True)

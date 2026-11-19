@@ -65,6 +65,13 @@ class LiveInstallation:
             for path in paths:
                 sys.path.remove(path)
         try:
+            # Admission was established using the backend fixture's temporary override.
+            # Publish its private files at the normal layout-2 paths before starting Trivial.
+            self.fixture.runtime = self.fixture.runtime.rename(self.fixture.settings / "runtime")
+            bin_dir = self.home / ".local/bin"
+            bin_dir.parent.mkdir(mode=0o700)
+            self.fixture.bin = self.fixture.bin.rename(bin_dir)
+            self.fixture.env["PATH"] = str(self.bin) + os.pathsep + self.fixture.env["PATH"]
             place = self.bin / ".arbol-builds/schema"
             place.mkdir(parents=True, mode=0o700)
             for name in ("migrations.toml", *names):
@@ -77,10 +84,14 @@ class LiveInstallation:
     def bin(self) -> Path:
         return Path(self.fixture.bin)
 
+    @property
+    def home(self) -> Path:
+        return Path(self.fixture.home)
+
     def run(self, entry: Path, subscription: str) -> tuple[int, str]:
-        env = {**self.fixture.env, "ARBOL_EXCHANGE_RUNTIME_DIR": str(self.fixture.runtime),
-               "ARBOL_EXCHANGE_BIN_DIR": str(self.bin)}
-        for key in ("ARBOL_TEST_TIME_SCALE", "ARBOL_EXCHANGE_ADMISSION_GENERATION", "ARBOL_ROOT", "ARBOL_CHAT"):
+        env = dict(self.fixture.env)
+        for key in ("ARBOL_TEST_TIME_SCALE", "ARBOL_EXCHANGE_ADMISSION_GENERATION", "ARBOL_ROOT", "ARBOL_CHAT",
+                    "ARBOL_EXCHANGE_RUNTIME_DIR", "ARBOL_EXCHANGE_BIN_DIR"):
             env.pop(key, None)
         args = [str(entry), "run", "--driver", "claude", "--subscription", subscription, "--model", "haiku",
                 "Answer with the single word: ready"]

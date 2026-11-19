@@ -68,11 +68,13 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     maker = RowMaker(folder.exchange)
     saver = Saver(connect, exchange.connection)
     saver.start()
+
+    async def execute(data: phases.ExchangeData) -> End:
+        return await execution(prepared, exchange, events, maker, saver, search_path, life, data)
+
     try:
         try:
-            phases.intake()
-            phases.planning()
-            end = await execution(prepared, exchange, events, maker, saver, search_path, life)
+            end = await phases.intake(prepared.installation.home, folder.path, exchange.message, execute)
         except OSError as error:
             life.error = error
             end = folder_failed(error)
@@ -113,7 +115,7 @@ def folder_failed(error: OSError | None) -> End:
 
 
 async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, maker: RowMaker, saver: Saver,
-                    search_path: str | None, life: SignsOfLife) -> End:
+                    search_path: str | None, life: SignsOfLife, data: phases.ExchangeData) -> End:
     """Run the selected Driver once and return the Exchange outcome."""
     if events.error is not None or life.error is not None:
         return folder_failed(events.error or life.error)

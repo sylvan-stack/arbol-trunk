@@ -68,7 +68,7 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     events = EventsFile(folder.path / "events.jsonl", output)
     maker = RowMaker(folder.exchange)
     saver = Saver(connect, exchange.connection)
-    details = PhaseDetails(folder.path)
+    details = PhaseDetails(folder.path, folder.exchange, lambda row: saver.add([row]))
     saver.start()
 
     async def execute(data: ExchangeData) -> End:

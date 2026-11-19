@@ -25,7 +25,7 @@ from .build import Compatibility
 from .errors import Refusal
 from .history import HistoryRow
 from .root import Installation, keychain_password
-from .rows import Row, RunRow, jsonb, row_line
+from .rows import PhaseDetailRow, Row, RunRow, jsonb, row_line
 from .storage import stored
 
 CALL_SECONDS = 5.0
@@ -327,6 +327,7 @@ class PostgresConnection:
     def __init__(self, connection: psycopg.AsyncConnection[Any], guard: SchemaGuard | None = None,
                  lease: Lease | None = None) -> None:
         self.connection = connection
+        self.schema_revision = 0
         self.guard = guard
         self.lease = lease
 
@@ -412,11 +413,15 @@ class PostgresConnection:
     async def save(self, row: Row) -> None:
         """One row, with an insert that does nothing when it is there, in a transaction of its own."""
         self.require_lease()
+        if isinstance(row, PhaseDetailRow) and self.schema_revision < 4:
+            return
         sql, params = row.statement()
         try:
             await within_limit(self.connection.execute(sql, params))
         except DatabaseUnavailable as error:
             if permanent(error):
+                if isinstance(row, PhaseDetailRow):
+                    return
                 raise RowRejected(row) from error
             raise
 
@@ -463,6 +468,8 @@ class PostgresConnection:
             for row in tuple(rows):
                 if replaced and not isinstance(row, RunRow):
                     continue
+                if isinstance(row, PhaseDetailRow) and self.schema_revision < 4:
+                    continue
                 sql, params = row.statement()
                 try:
                     async with transaction(self.connection):  # a refused row rolls back only its savepoint
@@ -471,7 +478,7 @@ class PostgresConnection:
                     if not permanent(refused):
                         raise
                     rows.remove(row)  # survive a later transaction/connection failure without retrying this row
-                    if not end_written:
+                    if not end_written and not isinstance(row, PhaseDetailRow):
                         state = "failed"
                         error = {"code": "trunk_failed", "message": str(RowRejected(row))}
                         end_written = True  # keep the first refused line as the cause
@@ -505,7 +512,7 @@ def postgres(info: str, *, guard: SchemaGuard | None = None, lease: Lease | None
         try:
             await connection.admit()
             if guard is not None:
-                await guard.require(raw)
+                connection.schema_revision, _ = await guard.require(raw)
         except BaseException:
             await connection.close()
             raise

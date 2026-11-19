@@ -31,6 +31,7 @@ from .end import End
 from .errors import Refusal
 from .folder import EXCHANGE_FORMAT, ExchangeFolder
 from .output import Output
+from .phase_details import replay_phase_details
 from .process import process_alive as process_alive
 from .root import SECURITY, Installation, read_json
 from .rows import Row, RowMaker, RunRow, moment
@@ -228,6 +229,7 @@ async def _settle_locked(context: Installation, exchange: str, build: str, *,
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise ValueError
         found = replay(path, exchange, pending.stored.accepted_at)
+        found.rows.extend(replay_phase_details(pending.folder.path, exchange))
         end = final_end(pending.folder.record, found)
         written = bool(pending.folder.record.get("end") or found.end)
         stored = pending.stored

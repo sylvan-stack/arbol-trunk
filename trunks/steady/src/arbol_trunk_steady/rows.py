@@ -98,7 +98,18 @@ class RunRow:
                  jsonb(self.started), self.ended_at)))
 
 
-Row = MessageRow | ToolCallRow | RunRow
+@dataclass(frozen=True)
+class PhaseDetailRow:
+    exchange: str
+    position: int
+    entry: str
+
+    def statement(self) -> Statement:
+        return ("INSERT INTO exchange_phase_details (exchange_id, position, entry) VALUES (%s, %s, %s)"
+                " ON CONFLICT DO NOTHING", (self.exchange, self.position, self.entry))
+
+
+Row = MessageRow | ToolCallRow | RunRow | PhaseDetailRow
 
 
 def row_line(row: Row) -> int:

@@ -4,16 +4,10 @@ import asyncio
 import json
 import subprocess
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 from .end import End
-
-
-@dataclass
-class ExchangeData:
-    cue_context: str | None = None
-    system_prompt: str | None = None
+from .phase_details import ExchangeData, PhaseDetails
 
 
 def prepare_cues(home: Path, folder: Path, message: str, earlier_messages: list[str]) -> ExchangeData:
@@ -47,16 +41,22 @@ def prepare_cues(home: Path, folder: Path, message: str, earlier_messages: list[
 
 
 async def intake(home: Path, folder: Path, message: str, earlier_messages: list[str],
-                 execute: Callable[[ExchangeData], Awaitable[End]]) -> End:
+                 details: PhaseDetails, execute: Callable[[ExchangeData], Awaitable[End]]) -> End:
+    details.enter("intake")
     data = await asyncio.to_thread(prepare_cues, home, folder, message, earlier_messages)
-    return await planning(data, execute)
+    details.public.cue_context = data.cue_context
+    details.public.system_prompt = data.system_prompt
+    return await planning(details, execute)
 
 
-async def planning(data: ExchangeData, execute: Callable[[ExchangeData], Awaitable[End]]) -> End:
+async def planning(details: PhaseDetails, execute: Callable[[ExchangeData], Awaitable[End]]) -> End:
     """Continue to Execution with the public Exchange data."""
-    return await execute(data)
+    details.enter("planning")
+    return await execute(details.public)
 
 
-def finalization(outcome: End) -> End:
+def finalization(details: PhaseDetails, outcome: End) -> End:
     """Pass the outcome to the shared Exchange end handling."""
+    details.enter("finalization")
+    details.finish()
     return outcome

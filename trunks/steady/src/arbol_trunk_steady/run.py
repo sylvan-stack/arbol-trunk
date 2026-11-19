@@ -17,6 +17,7 @@ from .errors import Refusal
 from .events import EventsFile
 from .life import SignsOfLife
 from .output import Output as Output
+from .phase_details import ExchangeData, PhaseDetails
 from .request import run_request, write_request
 from .rows import RowMaker
 from .saver import Saver
@@ -67,9 +68,11 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
     events = EventsFile(folder.path / "events.jsonl", output)
     maker = RowMaker(folder.exchange)
     saver = Saver(connect, exchange.connection)
+    details = PhaseDetails(folder.path)
     saver.start()
 
-    async def execute(data: phases.ExchangeData) -> End:
+    async def execute(data: ExchangeData) -> End:
+        details.enter("execution")
         return await execution(prepared, exchange, events, maker, saver, search_path, life, data)
 
     try:
@@ -79,7 +82,7 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
                 if item.get("type") == "message" and item.get("role") == "user" and isinstance(item.get("text"), str)
             ]
             end = await phases.intake(prepared.installation.home, folder.path, exchange.message,
-                                      earlier_messages, execute)
+                                      earlier_messages, details, execute)
         except OSError as error:
             life.error = error
             end = folder_failed(error)
@@ -88,7 +91,7 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
         await saver.stop()
         if saver.rejected is not None and events.error is None and life.error is None:
             end = failed("trunk_failed", str(saver.rejected))
-        end = phases.finalization(end)
+        end = phases.finalization(details, end)
         try:
             if events.error is None and life.error is None:
                 if events.end_fills(end.value()):
@@ -107,6 +110,7 @@ async def run_accepted(prepared: Prepared, connect: Connect, exchange: Exchange,
                 pass  # the end already stands; settling can remove what cleanup left
         return end
     finally:
+        details.finish()
         events.close()
         await saver.close()
 
@@ -120,7 +124,7 @@ def folder_failed(error: OSError | None) -> End:
 
 
 async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, maker: RowMaker, saver: Saver,
-                    search_path: str | None, life: SignsOfLife, data: phases.ExchangeData) -> End:
+                    search_path: str | None, life: SignsOfLife, data: ExchangeData) -> End:
     """Run the selected Driver once and return the Exchange outcome."""
     if events.error is not None or life.error is not None:
         return folder_failed(events.error or life.error)

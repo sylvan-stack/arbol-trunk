@@ -80,6 +80,14 @@ class PhaseDetails:
             self.private[self.current].commands.append(entry)
             self.record(command=entry)
 
+    def tool_started(self, event: dict[str, Any]) -> None:
+        name = event.get("name")
+        if isinstance(name, str):
+            self.add_command({
+                "kind": "tool", "command": name, "parameters": event.get("input"),
+                **{key: event[key] for key in ("runId", "callId", "parentCallId") if key in event},
+            })
+
     def record(self, **values: Any) -> None:
         if self.current is None:
             return

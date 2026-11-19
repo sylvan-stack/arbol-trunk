@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -166,7 +167,7 @@ async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, 
             ), "driver")
         except OSError as error:
             return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
-        over = await drive(run, events, maker, saver, control, life=life)
+        over = await drive(run, events, maker, saver, control, life=life, on_tool_started=details.tool_started)
         run.close_control()
         await run.wait()  # the process has ended; this waits for no pipe (gh-119710)
     finally:
@@ -195,7 +196,8 @@ class RunOver:
 
 
 async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, control: ControlFile | None = None,
-                clock: Clock = UPTIME, life: SignsOfLife | None = None) -> RunOver:
+                clock: Clock = UPTIME, life: SignsOfLife | None = None, *,
+                on_tool_started: Callable[[dict[str, Any]], None] | None = None) -> RunOver:
     """The rounds of the loop for one run, until the run is over: its Driver's process has ended and its output has
     been read to the end, for at most one second after the process ended (TRV-0, "Stopping the run"). Each round waits
     at most one second for output, appends what arrived, and hands each new `stop` and `answer` line of `control`
@@ -233,6 +235,8 @@ async def drive(run: Driver, events: EventsFile, maker: RowMaker, saver: Saver, 
             wait = min(wait, max(kill_at - clock.now(), 0.0))
         for line in await run.read(wait):
             last_event = clock.now()  # even an output fragment omitted by a size limit is an event
+            if line.event.get("type") == "tool_started" and on_tool_started is not None:
+                on_tool_started(line.event)
             try:
                 n = events.append_event(line)
             except OSError:

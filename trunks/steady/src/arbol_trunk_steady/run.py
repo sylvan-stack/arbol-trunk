@@ -124,25 +124,32 @@ async def execution(prepared: Prepared, exchange: Exchange, events: EventsFile, 
     if launcher is None:
         return failed("driver_failed", f"No folder of the search path holds the launcher "
                                        f"{launcher_name(prepared.driver)}.")
-    request = run_request(exchange=folder.exchange, chat=exchange.chat, driver=prepared.driver,
-                          route=prepared.handed.route, working_folder=prepared.handed.working_folder,
-                          history=exchange.history, message=exchange.message)
-    request_file = write_request(folder.path, request)
     control = ControlFile(folder.path / "control")
     try:
         if any(line.kind == "stop" for line in control.read()):  # read just before the run (RCT-2.7, TRV-0.1)
             return cancelled()
         try:
-            await life.wait(capabilities(launcher, prepared.driver, prepared.handed.route.get("subscription"),
-                                         prepared.handed.working_folder, prepared.installation.home,
-                                         lambda: any(line.kind == "stop" for line in control.read())), "driver")
-            if life.error is not None:
-                return folder_failed(life.error)
-            run = await life.wait(DriverRun.start(launcher, request_file, prepared.handed.working_folder), "driver")
+            accepts_cue_context = await life.wait(
+                capabilities(launcher, prepared.driver, prepared.handed.route.get("subscription"),
+                             prepared.handed.working_folder, prepared.installation.home,
+                             lambda: any(line.kind == "stop" for line in control.read())), "driver")
         except CapabilityStopped:
             return cancelled()
         except CapabilityError as error:
             return failed("driver_failed", str(error))
+        except OSError as error:
+            return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
+        if life.error is not None:
+            return folder_failed(life.error)
+        request = run_request(exchange=folder.exchange, chat=exchange.chat, driver=prepared.driver,
+                              route=prepared.handed.route, working_folder=prepared.handed.working_folder,
+                              history=exchange.history, message=exchange.message,
+                              cue_context=data.cue_context if accepts_cue_context else None)
+        request_file = write_request(folder.path, request)
+        if any(line.kind == "stop" for line in control.read()):
+            return cancelled()
+        try:
+            run = await life.wait(DriverRun.start(launcher, request_file, prepared.handed.working_folder), "driver")
         except OSError as error:
             return failed("driver_failed", f"The launcher {launcher} could not be started: {error.strerror}.")
         over = await drive(run, events, maker, saver, control, life=life)

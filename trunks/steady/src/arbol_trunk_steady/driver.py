@@ -105,7 +105,7 @@ async def capability_query(launcher: str, arguments: list[str], cwd: str, stoppe
 
 
 async def capabilities(launcher: str, driver: str, subscription: str | None, cwd: str, home: Path,
-                       stopped: Callable[[], bool]) -> None:
+                       stopped: Callable[[], bool]) -> bool:
     migration_ready(home, driver, subscription)
     info = await capability_query(launcher, ["info"], cwd, stopped)
     if (not isinstance(info, dict) or info.get("driver") != driver
@@ -125,6 +125,9 @@ async def capabilities(launcher: str, driver: str, subscription: str | None, cwd
     migration_ready(home, driver, subscription)
     if stopped():
         raise CapabilityStopped
+    features = info.get("capabilities")
+    cue_version = features.get("cueContext") if isinstance(features, dict) else None
+    return type(cue_version) is int and cue_version == 1
 
 
 def launcher_name(driver: str) -> str:

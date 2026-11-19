@@ -1,7 +1,4 @@
-"""The request of the one run, `run-1.json` in the Exchange's folder (TRV-0, "The request to the Driver"; TRV-D5).
-
-Exactly these fields, and no other: no system prompt, no limits, no labels, no further folders, no search path.
-"""
+"""The request of the one Driver run, including optional Steady turn context."""
 
 from __future__ import annotations
 
@@ -14,7 +11,7 @@ REQUEST_FILE = "run-1.json"
 
 
 def run_request(*, exchange: str, chat: str, driver: str, route: dict[str, str], working_folder: str,
-                history: list[dict[str, Any]], message: str) -> dict[str, Any]:
+                history: list[dict[str, Any]], message: str, cue_context: str | None = None) -> dict[str, Any]:
     request: dict[str, Any] = {"runId": f"{exchange}.1"}
     for name, field in (("subscription", "subscriptionId"), ("model", "model"), ("effort", "effort")):
         if name in route:
@@ -25,6 +22,8 @@ def run_request(*, exchange: str, chat: str, driver: str, route: dict[str, str],
     request["chatSessionId"] = chat
     if driver in ("claude", "codex"):
         request["arbolChat"] = True
+    if cue_context is not None:
+        request["cueContext"] = cue_context
     request["tools"] = "all"
     return request
 

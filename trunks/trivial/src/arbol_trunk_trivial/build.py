@@ -11,6 +11,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from installation_paths import INSTALLATION_LAYOUT
+
 from . import NAME
 
 BUILD_NUMBER = re.compile(r"(0|[1-9a-f][0-9a-f]*)", re.ASCII)
@@ -39,10 +41,17 @@ def schema_compatibility(value: object) -> Compatibility:
     return result
 
 
+def matches_layout(value: dict[str, Any]) -> bool:
+    layout = value.get("installationLayout")
+    return type(layout) is int and layout == INSTALLATION_LAYOUT
+
+
 def source_compatibility(folder: Path) -> Compatibility:
     value = json.loads((folder / "arbol-build.json").read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("component") != NAME:
         raise ValueError("The Build description must name this Trunk.")
+    if not matches_layout(value):
+        raise ValueError("The Build description must declare the active installation layout.")
     return schema_compatibility(value.get("schemaCompatibility"))
 
 
@@ -91,10 +100,12 @@ def build_info(start: Path | None = None) -> tuple[str, Compatibility]:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             if (not isinstance(manifest, dict) or manifest.get("component") != NAME
                     or manifest.get("build") != number
+                    or not matches_layout(manifest)
                     or schema_compatibility(manifest.get("schemaCompatibility")) != declared):
                 raise ValueError("The package and executable declarations differ.")
-        if record is not None and schema_compatibility(record.get("schemaCompatibility")) != declared:
+        if record is not None and (not matches_layout(record)
+                                   or schema_compatibility(record.get("schemaCompatibility")) != declared):
             raise ValueError("The registry and executable declarations differ.")
     except (OSError, ValueError):
-        raise BuildRecordError("Cannot verify the Trivial Build's schema compatibility declaration.") from None
+        raise BuildRecordError("Cannot verify the Trivial Build's installation layout and schema compatibility.") from None
     return number, declared

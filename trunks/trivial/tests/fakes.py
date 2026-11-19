@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from installation_paths import INSTALLATION_LAYOUT
+
 from arbol_trunk_trivial.admission import DIRECTORY, GATE, OWNER, STATE, WRITERS, runtime_folder
 from arbol_trunk_trivial.database import (
     Acceptance,
@@ -36,7 +38,8 @@ def unit_installation(home: Path) -> Installation:
     for folder in (runtime, bin_dir, socket, runtime / "exchanges", runtime / DIRECTORY):
         folder.mkdir(parents=True, mode=0o700)
     target = InstalledDatabase("arbol_test", str(socket), 5432, "fixture", True)
-    state = {"format": 1, "state": "normal", "generation": "a" * 32, "release": "b" * 64, "session": None,
+    state = {"format": INSTALLATION_LAYOUT, "state": "normal", "generation": "a" * 32,
+             "release": "b" * 64, "session": None,
              "source": {"host": target.host, "port": target.port, "database": target.name, "databaseOid": 1}}
     for name in (GATE, WRITERS, OWNER, STATE):
         fd = os.open(runtime / DIRECTORY / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

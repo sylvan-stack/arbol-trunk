@@ -12,6 +12,12 @@ from .end import End
 from .phase_details import ExchangeData, PhaseDetails
 
 
+def prepared_titles(value: object) -> list[str] | None:
+    if isinstance(value, list) and all(isinstance(title, str) and title.strip() and "\0" not in title for title in value):
+        return value
+    return None
+
+
 async def prepare_cues(home: Path, folder: Path, message: str, earlier_messages: list[str],
                        details: PhaseDetails) -> ExchangeData:
     """Use Forester's non-hook preparation, falling back to its plain-text interface on older Builds."""
@@ -47,7 +53,11 @@ async def prepare_cues(home: Path, folder: Path, message: str, earlier_messages:
             if not isinstance(system_prompt, str) or "\0" in system_prompt:
                 return ExchangeData()
             system_prompt.encode("utf-8")
-        return ExchangeData(cue_context=context, system_prompt=system_prompt)
+        return ExchangeData(
+            cue_context=context, system_prompt=system_prompt,
+            glossary_terms=prepared_titles(value.get("glossaryTerms")),
+            operational_artifacts=prepared_titles(value.get("operationalArtifacts")),
+        )
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return ExchangeData()
 

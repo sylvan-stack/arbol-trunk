@@ -22,6 +22,8 @@ type PhaseName = Literal["intake", "planning", "execution", "finalization"]
 class ExchangeData:
     cue_context: str | None = None
     system_prompt: str | None = None
+    glossary_terms: list[str] | None = None
+    operational_artifacts: list[str] | None = None
 
 
 @dataclass
@@ -62,6 +64,13 @@ class PhaseDetails:
         self.public.system_prompt = data.system_prompt
         self.record(privatePhase={"systemPrompt": data.system_prompt},
                     publicExchange={"cueContext": data.cue_context, "systemPrompt": data.system_prompt})
+        findings = {}
+        if data.glossary_terms is not None:
+            findings["glossaryTerms"] = data.glossary_terms
+        if data.operational_artifacts:
+            findings["operationalArtifacts"] = data.operational_artifacts
+        if findings:
+            self.record(exchangeUpdates=findings)
 
     def subprocess(self, argv: list[str], cwd: str, *, standard_input: Any = None,
                    parameters: dict[str, Any] | None = None) -> None:

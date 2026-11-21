@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from . import chat_title
 from .accept import ACCEPTANCE_SECONDS, Repeated, find_prior
 from .admission import GENERATION_ENV, Admission
 from .build import BuildRecordError, build_info
@@ -51,6 +52,7 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
                                          compatibility=compatibility)
         generation = os.environ.pop(GENERATION_ENV, None)
         with Admission(context.runtime).lease("normal", generation=generation) as lease:
+            connect: Connect
             if connector is None:
                 connect = installed_postgres(context, security, compatibility, lease=lease)
                 deadline = started + ACCEPTANCE_SECONDS
@@ -81,6 +83,12 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
 
 
 def main(args: list[str]) -> int:
+    if args[:1] == [chat_title.WORKER]:
+        if len(args) != 2 or not UUID.fullmatch(args[1]):
+            return 1
+        return asyncio.run(chat_title.run_worker(Path.home(), args[1]))
+    if args == [chat_title.MODEL]:
+        return chat_title.run_model(Path.home())
     started = time.monotonic()
     lead_process_group()
     install_handlers()

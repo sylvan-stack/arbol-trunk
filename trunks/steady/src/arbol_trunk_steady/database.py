@@ -156,6 +156,7 @@ class Connection(Protocol):
 
 
 Connect = Callable[[], Coroutine[Any, Any, Connection]]
+type PostgresConnect = Callable[[], Coroutine[Any, Any, PostgresConnection]]
 type LedgerRow = tuple[int, str, str, int]
 
 
@@ -241,7 +242,7 @@ class SchemaGuard:
 
 
 def installed_postgres(context: Installation, security: str, compatibility: Compatibility,
-                       *, lease: Lease | None = None) -> Connect:
+                       *, lease: Lease | None = None) -> PostgresConnect:
     """Use the same explicit target as status, with credentials scoped to libpq."""
     if lease is None:
         raise Refusal("maintenance", "No installation writer permit was supplied.")
@@ -410,6 +411,22 @@ class PostgresConnection:
             raise
         return Accepted(number, [HistoryRow(*row) for row in rows])
 
+    async def chat_title_source(self, exchange: str) -> tuple[str, str] | None:
+        self.require_lease()
+        async with self.connection.cursor() as cursor:
+            await within_limit(cursor.execute(
+                "SELECT c.id::text, m.text FROM chats c JOIN exchanges e ON e.chat_id = c.id "
+                "JOIN messages m ON m.exchange_id = e.id "
+                "WHERE e.id = %s AND e.number = 1 AND c.title IS NULL AND m.position = 0 AND m.role = 'user'",
+                (exchange,)))
+            row = await within_limit(cursor.fetchone())
+        return (str(row[0]), str(row[1])) if row else None
+
+    async def set_chat_title_if_untitled(self, chat: str, title: str) -> None:
+        self.require_lease()
+        await within_limit(self.connection.execute(
+            "UPDATE chats SET title = %s WHERE id = %s AND title IS NULL", (title, chat)))
+
     async def save(self, row: Row) -> None:
         """One row, with an insert that does nothing when it is there, in a transaction of its own."""
         self.require_lease()
@@ -503,10 +520,10 @@ class PostgresConnection:
             pass
 
 
-def postgres(info: str, *, guard: SchemaGuard | None = None, lease: Lease | None = None) -> Connect:
+def postgres(info: str, *, guard: SchemaGuard | None = None, lease: Lease | None = None) -> PostgresConnect:
     """Verify each newly opened production connection before handing it to a writer."""
 
-    async def connect() -> Connection:
+    async def connect() -> PostgresConnection:
         raw = await within_limit(psycopg.AsyncConnection.connect(info, autocommit=True))
         connection = PostgresConnection(raw, guard, lease)
         try:

@@ -144,6 +144,7 @@ class Exchange:
     message: str
     history: list[dict[str, Any]]
     line: str
+    needs_title: bool = False
 
 
 async def accept_message(prepared: Prepared, connect: Connect, *, build: str, process: dict[str, Any],
@@ -206,4 +207,4 @@ async def accept_message(prepared: Prepared, connect: Connect, *, build: str, pr
         raise Refusal("no_answer", "The Exchange folder could not be updated. Recover acceptance by UUID.") from None
     line = acceptance_line(exchange=exchange, chat=chat, number=accepted.number, build=build)
     return Exchange(folder, connection, chat, accepted.number, message,
-                    make_history(accepted.history, before=accepted.number), line)
+                    make_history(accepted.history, before=accepted.number), line, needs_title=accepted.needs_title)

@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from . import chat_title
 from .end import End
 from .phase_details import ExchangeData, PhaseDetails
 
@@ -63,8 +64,11 @@ async def prepare_cues(home: Path, folder: Path, message: str, earlier_messages:
 
 
 async def intake(home: Path, folder: Path, message: str, earlier_messages: list[str],
-                 details: PhaseDetails, execute: Callable[[ExchangeData], Awaitable[End]]) -> End:
+                 details: PhaseDetails, execute: Callable[[ExchangeData], Awaitable[End]],
+                 *, needs_title: bool = False) -> End:
     details.enter("intake")
+    if needs_title:
+        chat_title.launch(home, details)
     data = await prepare_cues(home, folder, message, earlier_messages, details)
     details.intake_output(data)
     return await planning(details, execute)

@@ -112,7 +112,13 @@ def run_model(home: Path) -> int:
         prompt = sys.stdin.buffer.read(MODEL_INPUT_BYTES + 1)
         if not 0 < len(prompt) <= MODEL_INPUT_BYTES:
             return 1
-        request = {"input": prompt.decode("utf-8"), "tools": "none", "model": "gpt-6.2-sol", "effort": "medium"}
+        request = {
+            "input": {"role": "user", "text": prompt.decode("utf-8")},
+            "history": [],
+            "tools": "none",
+            "model": "gpt-6.2-sol",
+            "effort": "medium",
+        }
         payload = (json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8")
         return subprocess.run([str(model_launcher(home)), "run", "--request", "-", "--output", "text"],
                               input=payload, stderr=subprocess.DEVNULL, check=False).returncode

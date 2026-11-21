@@ -89,6 +89,7 @@ class Acceptance:
 class Accepted:
     number: int  # the Exchange's place in its chat
     history: list[HistoryRow]  # the rows of the chat's earlier Exchanges, read in the same transaction
+    needs_title: bool = False
 
 
 @dataclass(frozen=True)
@@ -371,7 +372,8 @@ class PostgresConnection:
                 await within_limit(cursor.execute(
                     "INSERT INTO chats (id, created_at) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                     (a.chat, a.accepted_at)))
-                await within_limit(cursor.execute("SELECT id FROM chats WHERE id = %s FOR UPDATE", (a.chat,)))
+                await within_limit(cursor.execute("SELECT title FROM chats WHERE id = %s FOR UPDATE", (a.chat,)))
+                title_row = await within_limit(cursor.fetchone())
                 message = a.message
                 if a.replaces is not None:
                     prior = await self.find_exchange(a.exchange)
@@ -409,7 +411,8 @@ class PostgresConnection:
             if isinstance(error.__cause__, sqlstate.UniqueViolation) and error.__cause__.diag.constraint_name in BUSY:
                 raise ChatBusy(await self.open_exchange(a.chat)) from None
             raise
-        return Accepted(number, [HistoryRow(*row) for row in rows])
+        return Accepted(number, [HistoryRow(*row) for row in rows],
+                        needs_title=number == 1 and a.replaces is None and title_row == (None,))
 
     async def chat_title_source(self, exchange: str) -> tuple[str, str] | None:
         self.require_lease()

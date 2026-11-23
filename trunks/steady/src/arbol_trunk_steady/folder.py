@@ -19,7 +19,7 @@ from .errors import Refusal
 
 FILE_MODE = 0o600
 FOLDER_MODE = 0o700
-EXCHANGE_FORMAT = 1
+EXCHANGE_FORMAT = 2
 FIXED = ("exchangeFormat", "exchange", "chat", "trunk", "build", "process", "route", "smallCallRoute",
          "workingFolder")
 ORDER = (*FIXED, "acceptedAt", "signsOfLife", "end")  # the order of RCT-1's example

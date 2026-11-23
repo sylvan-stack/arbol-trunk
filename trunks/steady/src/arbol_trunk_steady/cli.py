@@ -16,14 +16,17 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from installation_paths import runtime_folder
+
 from . import chat_title
 from .accept import ACCEPTANCE_SECONDS, Repeated, find_prior
 from .admission import GENERATION_ENV, Admission
-from .build import BuildRecordError, build_info
+from .build import BuildRecordError, build_info, build_location
 from .command import UUID, handed, parse
 from .database import Connect, installed_postgres, preflight
 from .detach import lead_process_group
 from .errors import Refusal
+from .exchange_release import writer_version
 from .process import started_at
 from .root import SECURITY, installation, private_directory
 from .run import Output, run_exchange
@@ -44,8 +47,13 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
         command = parse(args)
         build, compatibility = build_info()
         context = installation(home)
-        if build == "0" and not context.target.socket:
+        if (build == "0" or connector is not None or settle_connect is not None) and not context.target.socket:
             raise Refusal("no_fit", "The Steady checkout requires an isolated PostgreSQL socket.")
+        if build == "0" or connector is not None or settle_connect is not None:
+            live = runtime_folder(Path.home()).resolve()
+            isolated = context.runtime.resolve()
+            if isolated == live or isolated.is_relative_to(live) or live.is_relative_to(isolated):
+                raise Refusal("no_fit", "The Steady checkout requires an isolated Exchange runtime.")
         if command.operation == "settle":
             return await settle_exchange(context, command.options["--exchange"], output=output,
                                          security=security, connect=settle_connect, build=build,
@@ -53,6 +61,10 @@ async def start(args: list[str], *, home: Path, started: float, connector: Conne
         generation = os.environ.pop(GENERATION_ENV, None)
         with Admission(context.runtime).lease("normal", generation=generation) as lease:
             connect: Connect
+            if build != "0":
+                package, record = build_location(None)
+                if package is None or record is None or writer_version(lease, "arbol-trunk/steady", build, package) != 2:
+                    raise Refusal("no_fit", "The Steady Build is not authorized for Exchange format 2.")
             if connector is None:
                 connect = installed_postgres(context, security, compatibility, lease=lease)
                 deadline = started + ACCEPTANCE_SECONDS

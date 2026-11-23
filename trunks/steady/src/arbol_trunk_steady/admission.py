@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from installation_paths import INSTALLATION_LAYOUT
 
@@ -99,6 +99,16 @@ class State:
     source: Source
     session: str | None
     release: str | None
+    exchange_authorization: str | None = None
+
+
+def unique_pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("Duplicate admission field.")
+        result[key] = value
+    return result
 
 
 def read_state(folder: int) -> State:
@@ -110,25 +120,30 @@ def read_state(folder: int) -> State:
             raise ValueError("Admission state exceeds its size limit.")
     finally:
         os.close(fd)
-    value = json.loads(raw)
-    if (not isinstance(value, dict) or value.keys() != {"format", "state", "generation", "source", "session", "release"}
+    value = json.loads(raw, object_pairs_hook=unique_pairs)
+    keys = {"format", "state", "generation", "source", "session", "release"}
+    if (not isinstance(value, dict) or set(value) not in (keys, keys | {"exchangeAuthorization"})
             or type(value["format"]) is not int or value["format"] != INSTALLATION_LAYOUT):
         raise ValueError("Unknown admission format.")
     phase, generation, session, release = (value[key] for key in ("state", "generation", "session", "release"))
+    authorization = value.get("exchangeAuthorization")
     if (phase not in ("normal", "draining", "exclusive")
             or not isinstance(generation, str) or TOKEN.fullmatch(generation) is None
             or (session is not None and (not isinstance(session, str) or TOKEN.fullmatch(session) is None))
             or (release is not None and (not isinstance(release, str) or SHA256.fullmatch(release) is None))
+            or ("exchangeAuthorization" in value and (not isinstance(authorization, str)
+                or SHA256.fullmatch(authorization) is None or release is None))
             or (phase == "normal" and (session is not None or release is None))
             or (phase != "normal" and session is None)):
         raise ValueError("Unknown admission state.")
-    return State(phase, generation, checked_source(value["source"]), session, release)
+    return State(phase, generation, checked_source(value["source"]), session, release, authorization)
 
 
 @dataclass
 class Lease:
     state: State
     pid: int
+    runtime: Path
 
     def require(self) -> None:
         if self.pid != os.getpid():
@@ -177,7 +192,7 @@ def directory_lease(runtime: Path, mode: Mode, generation: str | None) -> Iterat
                 leases.enter_context(lock(folder, WRITERS, fcntl.LOCK_SH))
         except (OSError, ValueError, RecursionError):
             raise Refusal("maintenance", "The installation writer admission is unavailable.") from None
-        lease = Lease(state, os.getpid())
+        lease = Lease(state, os.getpid(), runtime)
         try:
             yield lease
         finally:

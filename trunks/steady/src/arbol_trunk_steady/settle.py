@@ -108,7 +108,8 @@ async def open_settlement(context: Installation, exchange: str, build: str, *, c
                 or any(item.st_uid != os.getuid() or item.st_mode & 0o077 for item in (info, record_info))):
             raise ValueError
         record = read_json(path / "record.json")
-        if (not isinstance(record, dict) or record.get("exchange") != exchange
+        if (not isinstance(record, dict) or "root" in record or "rootContract" in record
+                or record.get("exchange") != exchange
                 or type(record.get("exchangeFormat")) is not int or record["exchangeFormat"] != EXCHANGE_FORMAT):
             raise ValueError
     except (OSError, ValueError):
